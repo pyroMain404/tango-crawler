@@ -3,7 +3,7 @@ services:
     build: .
     restart: unless-stopped
     volumes:
-      - ./data:/data        # SQLite persiste qui sul host
+      - ~/.local/share/tango-crawler:/data
     environment:
       FETCH_URL:       "https://play5.newradio.it/stream/onairtxt/3881"
       NORMAL_INTERVAL: "90"   # secondi tra fetch normali
