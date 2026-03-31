@@ -1,0 +1,21 @@
+services:
+  crawler:
+    build: .
+    restart: unless-stopped
+    volumes:
+      - ./data:/data        # SQLite persiste qui sul host
+    environment:
+      FETCH_URL:       "https://play5.newradio.it/stream/onairtxt/3881"
+      NORMAL_INTERVAL: "90"   # secondi tra fetch normali
+      RETRY_INTERVAL:  "30"   # secondi quando il titolo non cambia
+      REQUEST_TIMEOUT: "10"
+      DB_PATH:         "/data/tracks.db"
+      LOG_LEVEL:       "INFO"
+    # Limiti risorse: ~30 MB RAM, CPU quasi zero (dorme quasi sempre)
+    mem_limit: 64m
+    cpus: "0.05"
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "5m"
+        max-file: "2"
