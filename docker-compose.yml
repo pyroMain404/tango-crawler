@@ -11,6 +11,7 @@ services:
       REQUEST_TIMEOUT: "10"
       DB_PATH:         "/data/tracks.db"
       LOG_LEVEL:       "INFO"
+      TZ:              "Europe/Rome"
     # Limiti risorse: ~30 MB RAM, CPU quasi zero (dorme quasi sempre)
     mem_limit: 64m
     cpus: "0.05"
