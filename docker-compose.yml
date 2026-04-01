@@ -20,3 +20,15 @@ services:
       options:
         max-size: "5m"
         max-file: "2"
+
+  normalizer:
+    build: .
+    profiles: ["normalize"]      # non parte con `docker compose up`
+    volumes:
+      - ~/.local/share/tango-crawler:/data
+    environment:
+      DB_PATH:        "/data/tracks.db"
+      NORMALIZED_DB:  "/data/tango.db"
+      TZ:             "Europe/Rome"
+    command: ["python", "normalize.py"]
+    mem_limit: 64m

@@ -6,13 +6,15 @@ from datetime import datetime
 
 import requests
 
+from common import get_program, parse_track
+
 # --- Config (all overridable via env vars) ---
-FETCH_URL      = os.getenv("FETCH_URL",       "https://play5.newradio.it/stream/onairtxt/3881")
-NORMAL_INTERVAL = int(os.getenv("NORMAL_INTERVAL", "90"))   # seconds between normal fetches
-RETRY_INTERVAL  = int(os.getenv("RETRY_INTERVAL",  "30"))   # seconds when title is unchanged
+FETCH_URL       = os.getenv("FETCH_URL",       "https://play5.newradio.it/stream/onairtxt/3881")
+NORMAL_INTERVAL = int(os.getenv("NORMAL_INTERVAL", "90"))
+RETRY_INTERVAL  = int(os.getenv("RETRY_INTERVAL",  "30"))
 REQUEST_TIMEOUT = int(os.getenv("REQUEST_TIMEOUT", "10"))
-DB_PATH        = os.getenv("DB_PATH",         "/data/tracks.db")
-LOG_LEVEL      = os.getenv("LOG_LEVEL",       "INFO")
+DB_PATH         = os.getenv("DB_PATH",         "/data/tracks.db")
+LOG_LEVEL       = os.getenv("LOG_LEVEL",       "INFO")
 
 logging.basicConfig(
     level=getattr(logging, LOG_LEVEL.upper(), logging.INFO),
@@ -27,29 +29,47 @@ def init_db() -> sqlite3.Connection:
     conn = sqlite3.connect(DB_PATH, check_same_thread=False)
     conn.execute("""
         CREATE TABLE IF NOT EXISTS tracks (
-            id         INTEGER PRIMARY KEY AUTOINCREMENT,
-            title      TEXT    NOT NULL,
-            fetched_at TEXT    NOT NULL  -- ISO-8601, e.g. 2026-03-31T14:05:00
+            id          INTEGER PRIMARY KEY AUTOINCREMENT,
+            raw_title   TEXT    NOT NULL,
+            orchestra   TEXT,
+            singer      TEXT,
+            track_title TEXT,
+            year        INTEGER,
+            author      TEXT,
+            dancers     TEXT,
+            program     TEXT,
+            fetched_at  TEXT    NOT NULL
         )
     """)
-    # Index to make time-range queries fast
-    conn.execute("""
-        CREATE INDEX IF NOT EXISTS idx_fetched_at ON tracks (fetched_at)
-    """)
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_fetched_at ON tracks (fetched_at)")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_orchestra  ON tracks (orchestra)")
     conn.commit()
     return conn
 
 
-def get_last_title(conn: sqlite3.Connection) -> str | None:
+def get_last_raw_title(conn: sqlite3.Connection) -> str | None:
     row = conn.execute(
-        "SELECT title FROM tracks ORDER BY id DESC LIMIT 1"
+        "SELECT raw_title FROM tracks ORDER BY id DESC LIMIT 1"
     ).fetchone()
     return row[0] if row else None
 
 
-def insert_track(conn: sqlite3.Connection, title: str) -> None:
-    ts = datetime.now().strftime("%Y-%m-%dT%H:%M:%S")
-    conn.execute("INSERT INTO tracks (title, fetched_at) VALUES (?, ?)", (title, ts))
+def insert_track(conn: sqlite3.Connection, raw_title: str, dt: datetime, parsed: dict) -> None:
+    conn.execute("""
+        INSERT INTO tracks
+            (raw_title, orchestra, singer, track_title, year, author, dancers, program, fetched_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+    """, (
+        raw_title,
+        parsed['orchestra'],
+        parsed['singer'],
+        parsed['track_title'],
+        parsed['year'],
+        parsed['author'],
+        parsed['dancers'],
+        get_program(dt.hour),
+        dt.strftime("%Y-%m-%dT%H:%M:%S"),
+    ))
     conn.commit()
 
 
@@ -70,25 +90,30 @@ def main() -> None:
 
     while True:
         try:
-            title = fetch_title()
-            if not title:
+            raw_title = fetch_title()
+            if not raw_title:
                 log.warning("Titolo non trovato nella risposta, attendo %ds", RETRY_INTERVAL)
                 time.sleep(RETRY_INTERVAL)
                 continue
 
-            if title.startswith("|"):
-                log.debug("Ignorato (cortina/metadati): '%s'", title)
+            if raw_title.startswith("|"):
+                log.debug("Ignorato (cortina/metadati): '%s'", raw_title)
                 time.sleep(NORMAL_INTERVAL)
                 continue
 
-            last = get_last_title(conn)
-            if title == last:
-                log.info("Invariato: '%s' — retry tra %ds", title, RETRY_INTERVAL)
+            last = get_last_raw_title(conn)
+            if raw_title == last:
+                log.info("Invariato: '%s' — retry tra %ds", raw_title, RETRY_INTERVAL)
                 time.sleep(RETRY_INTERVAL)
                 continue
 
-            insert_track(conn, title)
-            log.info("Salvato: '%s'", title)
+            now    = datetime.now()
+            parsed = parse_track(raw_title)
+            insert_track(conn, raw_title, now, parsed)
+            log.info("Salvato [%s] %s / %s",
+                     get_program(now.hour),
+                     parsed.get('orchestra', '?'),
+                     parsed.get('track_title', '?'))
 
         except requests.RequestException as exc:
             log.error("Errore HTTP: %s — retry tra %ds", exc, RETRY_INTERVAL)

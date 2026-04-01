@@ -4,7 +4,7 @@ FROM python:3.12-alpine
 RUN pip install --no-cache-dir requests==2.32.3
 
 WORKDIR /app
-COPY crawler.py query.py ./
+COPY common.py crawler.py query.py convert.py normalize.py ./
 
 VOLUME ["/data"]
 
