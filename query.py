@@ -1,43 +1,72 @@
 #!/usr/bin/env python3
 """
-Query rapida sul DB — esempi:
+Query rapida sul DB — eseguibile direttamente sull'host senza Docker.
 
-  # tutti i titoli di oggi
-  python query.py
+Default: tango.db (storico normalizzato).
+Flag --raw: tracks.db (giornata in corso, non ancora normalizzata).
 
-  # fascia oraria abbreviata: ore 13 (13:00-13:59)
-  python query.py 13
-
-  # fascia oraria abbreviata: dalle 13 alle 14 (13:00-14:59)
-  python query.py 13-14
-
-  # fascia oraria specifica
-  python query.py --from "2026-03-31T21:00" --to "2026-03-31T23:59"
-
-  # solo una data
-  python query.py --date 2026-03-31
-
-  # fascia oraria su data specifica
+Esempi:
+  python query.py                          # oggi da tango.db
+  python query.py --raw                    # oggi da tracks.db
+  python query.py 13                       # ore 13:00-13:59 di oggi
+  python query.py 13-14                    # ore 13:00-14:59 di oggi
   python query.py 21-23 --date 2026-03-31
-
-  # ultimi N inserimenti
+  python query.py --date 2026-03-31
+  python query.py --from "2026-03-31T21:00" --to "2026-03-31T23:59"
   python query.py --last 20
 """
 import argparse
-import sqlite3
 import os
 import re
+import sqlite3
 from datetime import date
 
-DB_PATH = os.getenv("DB_PATH", "data/tracks.db")
+_BASE = os.path.expanduser("~/.local/share/tango-crawler")
+TANGO_DB  = os.getenv("NORMALIZED_DB", os.path.join(_BASE, "tango.db"))
+TRACKS_DB = os.getenv("DB_PATH",       os.path.join(_BASE, "tracks.db"))
+
+
+def _tango_query(where: str = "", order: str = "p.fetched_at") -> str:
+    """Costruisce la query su tango.db inserendo WHERE prima di GROUP BY."""
+    where_clause = f"WHERE {where}" if where else ""
+    return f"""
+        SELECT p.fetched_at,
+               o.name,
+               GROUP_CONCAT(s.name, ', '),
+               t.name,
+               p.year,
+               pr.name
+        FROM   plays p
+        LEFT JOIN orchestras o    ON o.id  = p.orchestra_id
+        LEFT JOIN titles t        ON t.id  = p.title_id
+        LEFT JOIN programs pr     ON pr.id = p.program_id
+        LEFT JOIN play_singers ps ON ps.play_id = p.id
+        LEFT JOIN singers s       ON s.id  = ps.singer_id
+        {where_clause}
+        GROUP BY p.id
+        ORDER BY {order}
+    """
+
+
+def _tracks_query(where: str = "", order: str = "id") -> str:
+    where_clause = f"WHERE {where}" if where else ""
+    return f"SELECT fetched_at, orchestra, singer, track_title, year, program FROM tracks {where_clause} ORDER BY {order}"
+
+
+def fmt(row) -> str:
+    fetched_at, orchestra, singer, track_title, year, program = row
+    artist = f"{orchestra} / {singer}" if singer else orchestra or "?"
+    title  = track_title or "?"
+    suffix = f" ({year})" if year else ""
+    slot   = f"[{program}]  " if program else ""
+    return f"{fetched_at}  {slot}{artist} — {title}{suffix}"
 
 
 def parse_hour_range(value: str) -> tuple[str, str]:
-    """Parsa '13' o '13-14' e restituisce (from_hour, to_hour) come stringhe 'HH'."""
     m = re.fullmatch(r"(\d{1,2})(?:-(\d{1,2}))?", value)
     if not m:
         raise argparse.ArgumentTypeError(
-            f"Formato ora non valido: '{value}'. Usa '13' oppure '13-14'."
+            f"Formato non valido: '{value}'. Usa '13' oppure '13-14'."
         )
     h_from = int(m.group(1))
     h_to   = int(m.group(2)) if m.group(2) else h_from
@@ -48,56 +77,53 @@ def parse_hour_range(value: str) -> tuple[str, str]:
 
 def main():
     parser = argparse.ArgumentParser(description="Interroga il DB dei brani")
-    parser.add_argument("hours",   nargs="?",  help="Fascia oraria: '13' o '13-14'")
-    parser.add_argument("--from",  dest="from_ts", help="Da timestamp (YYYY-MM-DDTHH:MM)")
-    parser.add_argument("--to",    dest="to_ts",   help="A timestamp  (YYYY-MM-DDTHH:MM)")
-    parser.add_argument("--date",  help="Giorno (YYYY-MM-DD), default oggi")
-    parser.add_argument("--last",  type=int, default=0, help="Ultimi N record")
+    parser.add_argument("hours",  nargs="?",  help="Fascia oraria: '13' o '13-14'")
+    parser.add_argument("--from", dest="from_ts", help="Da timestamp (YYYY-MM-DDTHH:MM)")
+    parser.add_argument("--to",   dest="to_ts",   help="A timestamp  (YYYY-MM-DDTHH:MM)")
+    parser.add_argument("--date", help="Giorno (YYYY-MM-DD), default oggi")
+    parser.add_argument("--last", type=int, default=0, help="Ultimi N record")
+    parser.add_argument("--raw",  action="store_true",
+                        help="Usa tracks.db (giornata in corso) invece di tango.db")
     args = parser.parse_args()
 
-    conn = sqlite3.connect(DB_PATH)
+    build = _tracks_query if args.raw else _tango_query
+    ts    = "fetched_at"  if args.raw else "p.fetched_at"
+    db    = TRACKS_DB     if args.raw else TANGO_DB
+    conn  = sqlite3.connect(db)
 
     if args.last:
-        rows = conn.execute(
-            "SELECT fetched_at, title FROM tracks ORDER BY id DESC LIMIT ?",
-            (args.last,)
-        ).fetchall()
+        order = "id DESC" if args.raw else "p.id DESC"
+        rows  = conn.execute(build(order=order) + " LIMIT ?", (args.last,)).fetchall()
         rows.reverse()
     elif args.hours:
         day = args.date or date.today().isoformat()
         h_from, h_to = parse_hour_range(args.hours)
-        from_ts = f"{day}T{h_from}:00:00"
-        to_ts   = f"{day}T{h_to}:59:59"
         rows = conn.execute(
-            "SELECT fetched_at, title FROM tracks WHERE fetched_at BETWEEN ? AND ? ORDER BY id",
-            (from_ts, to_ts)
+            build(where=f"{ts} BETWEEN ? AND ?"),
+            (f"{day}T{h_from}:00:00", f"{day}T{h_to}:59:59"),
         ).fetchall()
     elif args.date:
         rows = conn.execute(
-            "SELECT fetched_at, title FROM tracks WHERE fetched_at LIKE ? ORDER BY id",
-            (f"{args.date}%",)
+            build(where=f"{ts} LIKE ?"), (f"{args.date}%",)
         ).fetchall()
     elif args.from_ts or args.to_ts:
-        from_ts = args.from_ts or "0000-00-00"
-        to_ts   = args.to_ts   or "9999-99-99"
         rows = conn.execute(
-            "SELECT fetched_at, title FROM tracks WHERE fetched_at BETWEEN ? AND ? ORDER BY id",
-            (from_ts, to_ts)
+            build(where=f"{ts} BETWEEN ? AND ?"),
+            (args.from_ts or "0000-00-00", args.to_ts or "9999-99-99"),
         ).fetchall()
     else:
-        today = date.today().isoformat()
         rows = conn.execute(
-            "SELECT fetched_at, title FROM tracks WHERE fetched_at LIKE ? ORDER BY id",
-            (f"{today}%",)
+            build(where=f"{ts} LIKE ?"), (f"{date.today().isoformat()}%",)
         ).fetchall()
+
+    conn.close()
 
     if not rows:
         print("Nessun risultato.")
         return
 
-    for ts, title in rows:
-        print(f"{ts}  {title}")
-
+    for row in rows:
+        print(fmt(row))
     print(f"\n{len(rows)} brani trovati.")
 
 
