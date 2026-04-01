@@ -60,7 +60,11 @@ def migrate(db_path: str) -> None:
         )
     """)
 
+    skipped = 0
     for row_id, title, fetched_at in rows:
+        if title.startswith("|"):
+            skipped += 1
+            continue
         p = parse_track(title)
         try:
             hour = datetime.fromisoformat(fetched_at).hour
@@ -80,7 +84,8 @@ def migrate(db_path: str) -> None:
     conn.commit()
     conn.close()
 
-    print(f"Migrazione completata: {len(rows)} record convertiti.")
+    migrated = len(rows) - skipped
+    print(f"Migrazione completata: {migrated} record convertiti, {skipped} cortine/metadati scartati.")
     print(f"Backup disponibile in: {bak}")
 
 
