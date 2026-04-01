@@ -76,6 +76,11 @@ def main() -> None:
                 time.sleep(RETRY_INTERVAL)
                 continue
 
+            if title.startswith("|"):
+                log.debug("Ignorato (cortina/metadati): '%s'", title)
+                time.sleep(NORMAL_INTERVAL)
+                continue
+
             last = get_last_title(conn)
             if title == last:
                 log.info("Invariato: '%s' — retry tra %ds", title, RETRY_INTERVAL)
