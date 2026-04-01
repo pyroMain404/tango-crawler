@@ -86,11 +86,38 @@ CREATE TABLE IF NOT EXISTS play_singers (
     singer_id INTEGER NOT NULL REFERENCES singers(id),
     PRIMARY KEY (play_id, singer_id)
 );
+CREATE TABLE IF NOT EXISTS playlists (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    name        TEXT NOT NULL UNIQUE,
+    description TEXT,
+    created_at  TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%S', 'now', 'localtime'))
+);
+CREATE TABLE IF NOT EXISTS playlist_items (
+    id           INTEGER PRIMARY KEY AUTOINCREMENT,
+    playlist_id  INTEGER NOT NULL REFERENCES playlists(id) ON DELETE CASCADE,
+    orchestra_id INTEGER REFERENCES orchestras(id),
+    title_id     INTEGER REFERENCES titles(id),
+    position     INTEGER NOT NULL DEFAULT 0,
+    note         TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_playlist_items_playlist ON playlist_items(playlist_id);
 CREATE INDEX IF NOT EXISTS idx_plays_orchestra ON plays(orchestra_id);
 CREATE INDEX IF NOT EXISTS idx_plays_title     ON plays(title_id);
 CREATE INDEX IF NOT EXISTS idx_plays_year      ON plays(year);
 CREATE INDEX IF NOT EXISTS idx_plays_program   ON plays(program_id);
 CREATE INDEX IF NOT EXISTS idx_plays_fetched   ON plays(fetched_at);
+CREATE VIEW IF NOT EXISTS repertoire AS
+    SELECT
+        o.name                      AS orchestra,
+        t.name                      AS title,
+        MIN(p.year)                 AS year,
+        p.author                    AS author,
+        COUNT(*)                    AS times_played,
+        MAX(p.fetched_at)           AS last_seen
+    FROM plays p
+    JOIN orchestras o ON o.id = p.orchestra_id
+    JOIN titles     t ON t.id = p.title_id
+    GROUP BY p.orchestra_id, p.title_id;
 """
 
 

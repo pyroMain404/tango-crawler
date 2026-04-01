@@ -14,6 +14,9 @@ Esempi:
   python query.py --date 2026-03-31
   python query.py --from "2026-03-31T21:00" --to "2026-03-31T23:59"
   python query.py --last 20
+  python query.py --catalog                        # tutti i brani unici
+  python query.py --catalog --orchestra "DI SARLI" # catalogo di un'orchestra
+  python query.py --catalog --title "cumparsita"   # cerca un titolo
 """
 import argparse
 import os
@@ -75,6 +78,23 @@ def parse_hour_range(value: str) -> tuple[str, str]:
     return f"{h_from:02d}", f"{h_to:02d}"
 
 
+def _catalog_query(where: str = "") -> str:
+    where_clause = f"WHERE {where}" if where else ""
+    return f"""
+        SELECT orchestra, title, year, author, times_played, last_seen
+        FROM   repertoire
+        {where_clause}
+        ORDER BY orchestra, title
+    """
+
+
+def fmt_catalog(row) -> str:
+    orchestra, title, year, author, times_played, last_seen = row
+    year_str   = f" ({year})"    if year   else ""
+    author_str = f" [{author}]"  if author else ""
+    return f"{orchestra} — {title}{year_str}{author_str}  ×{times_played}  ultimo: {last_seen[:10]}"
+
+
 def main():
     parser = argparse.ArgumentParser(description="Interroga il DB dei brani")
     parser.add_argument("hours",  nargs="?",  help="Fascia oraria: '13' o '13-14'")
@@ -84,7 +104,29 @@ def main():
     parser.add_argument("--last", type=int, default=0, help="Ultimi N record")
     parser.add_argument("--raw",  action="store_true",
                         help="Usa tracks.db (giornata in corso) invece di tango.db")
+    parser.add_argument("--catalog", action="store_true",
+                        help="Catalogo brani unici (orchestra+titolo) con conteggio passaggi")
+    parser.add_argument("--orchestra", help="Filtra catalogo per orchestra (LIKE, case-insensitive)")
+    parser.add_argument("--title",     help="Filtra catalogo per titolo (LIKE, case-insensitive)")
     args = parser.parse_args()
+
+    if args.catalog:
+        conn = sqlite3.connect(TANGO_DB)
+        filters = []
+        if args.orchestra:
+            filters.append(f"UPPER(orchestra) LIKE UPPER('%{args.orchestra}%')")
+        if args.title:
+            filters.append(f"UPPER(title) LIKE UPPER('%{args.title}%')")
+        where = " AND ".join(filters)
+        rows  = conn.execute(_catalog_query(where)).fetchall()
+        conn.close()
+        if not rows:
+            print("Nessun risultato.")
+            return
+        for row in rows:
+            print(fmt_catalog(row))
+        print(f"\n{len(rows)} brani nel catalogo.")
+        return
 
     build = _tracks_query if args.raw else _tango_query
     ts    = "fetched_at"  if args.raw else "p.fetched_at"
