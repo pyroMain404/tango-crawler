@@ -3,6 +3,9 @@
 # Eseguire una sola volta dalla directory del progetto.
 set -euo pipefail
 
+# ── Argomenti ─────────────────────────────────────────────────────────────────
+MODE="${1:-}"   # "build" per rebuild rapido, vuoto per setup completo
+
 # ── Configurazione ────────────────────────────────────────────────────────────
 NORMALIZE_AT="06:00"      # orario giornaliero di normalizzazione (HH:MM)
 DATA_DIR="$HOME/.local/share/tango-crawler"
@@ -13,6 +16,18 @@ COMPOSE="docker compose -f $REPO_DIR/docker-compose.yml"
 info()    { echo "[INFO]  $*"; }
 success() { echo "[OK]    $*"; }
 warning() { echo "[WARN]  $*"; }
+
+# ── Modalità build rapido ──────────────────────────────────────────────────────
+if [ "$MODE" = "build" ]; then
+    info "Stop crawler..."
+    $COMPOSE down
+    info "Aggiorno repo..."
+    git -C "$REPO_DIR" pull
+    info "Rebuild + avvio..."
+    $COMPOSE up -d --build
+    success "Rebuild completato."
+    exit 0
+fi
 
 # ── 1. Directory dati ─────────────────────────────────────────────────────────
 info "Creo directory dati: $DATA_DIR"
