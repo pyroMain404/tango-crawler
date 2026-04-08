@@ -103,12 +103,12 @@ case "${1:-help}" in
 
     similar-titles)
         shift
-        python3 "$REPO_DIR/normalize.py" similar-titles "$@"
+        python3 "$REPO_DIR/normalize.py" similar-titles --dest "$DATA_DIR/tango.db" "$@"
         ;;
 
     boundary)
         shift
-        python3 "$REPO_DIR/normalize.py" boundary "$@"
+        python3 "$REPO_DIR/normalize.py" boundary --dest "$DATA_DIR/tango.db" "$@"
         ;;
 
     logs)
