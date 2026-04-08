@@ -67,7 +67,8 @@ fi
 # ── 6. Cron job per normalizzazione giornaliera ───────────────────────────────
 CRON_HOUR=$(echo "$NORMALIZE_AT" | cut -d: -f1)
 CRON_MIN=$(echo  "$NORMALIZE_AT" | cut -d: -f2)
-CRON_CMD="$CRON_MIN $CRON_HOUR * * * $COMPOSE --profile normalize run --rm normalizer >> $DATA_DIR/normalize.log 2>&1"
+DOCKER_BIN="$(which docker)"
+CRON_CMD="$CRON_MIN $CRON_HOUR * * * \"$DOCKER_BIN\" compose -f $REPO_DIR/docker-compose.yml --profile normalize run --rm normalizer >> $DATA_DIR/normalize.log 2>&1"
 
 # Rimuove eventuali voci precedenti, aggiunge quella aggiornata
 ( crontab -l 2>/dev/null | grep -v "tango-crawler"; echo "$CRON_CMD" ) | crontab -
