@@ -206,27 +206,58 @@ def main():
     build = _tracks_query if args.raw else _tango_query
     ts    = "fetched_at"  if args.raw else "p.fetched_at"
     db    = TRACKS_DB     if args.raw else TANGO_DB
-    conn  = sqlite3.connect(db)
+
+    # Filtri orchestra/titolo applicabili a tutte le query
+    extra_filters = []
+    extra_params  = []
+    if args.orchestra and not args.raw:
+        extra_filters.append("UPPER(o.name) LIKE UPPER(?)")
+        extra_params.append(f"%{args.orchestra}%")
+    elif args.orchestra:
+        extra_filters.append("UPPER(orchestra) LIKE UPPER(?)")
+        extra_params.append(f"%{args.orchestra}%")
+    if args.title and not args.raw:
+        extra_filters.append("UPPER(t.name) LIKE UPPER(?)")
+        extra_params.append(f"%{args.title}%")
+    elif args.title:
+        extra_filters.append("UPPER(track_title) LIKE UPPER(?)")
+        extra_params.append(f"%{args.title}%")
+
+    conn = sqlite3.connect(db)
+
+    has_time_filter = args.last or args.hours or args.date or args.from_ts or args.to_ts
 
     if args.last:
         order = "id DESC" if args.raw else "p.id DESC"
-        rows  = conn.execute(build(order=order) + " LIMIT ?", (args.last,)).fetchall()
+        where_parts = list(extra_filters)
+        where = " AND ".join(where_parts)
+        rows  = conn.execute(build(where=where, order=order) + " LIMIT ?",
+                             extra_params + [args.last]).fetchall()
         rows.reverse()
     elif args.hours:
         day = args.date or date.today().isoformat()
         h_from, h_to = parse_hour_range(args.hours)
+        where_parts = [f"{ts} BETWEEN ? AND ?"] + extra_filters
         rows = conn.execute(
-            build(where=f"{ts} BETWEEN ? AND ?") + limit_clause,
-            (f"{day}T{h_from}:00:00", f"{day}T{h_to}:59:59"),
+            build(where=" AND ".join(where_parts)) + limit_clause,
+            [f"{day}T{h_from}:00:00", f"{day}T{h_to}:59:59"] + extra_params,
         ).fetchall()
     elif args.date:
+        where_parts = [f"{ts} LIKE ?"] + extra_filters
         rows = conn.execute(
-            build(where=f"{ts} LIKE ?") + limit_clause, (f"{args.date}%",)
+            build(where=" AND ".join(where_parts)) + limit_clause,
+            [f"{args.date}%"] + extra_params,
         ).fetchall()
     elif args.from_ts or args.to_ts:
+        where_parts = [f"{ts} BETWEEN ? AND ?"] + extra_filters
         rows = conn.execute(
-            build(where=f"{ts} BETWEEN ? AND ?") + limit_clause,
-            (args.from_ts or "0000-00-00", args.to_ts or "9999-99-99"),
+            build(where=" AND ".join(where_parts)) + limit_clause,
+            [args.from_ts or "0000-00-00", args.to_ts or "9999-99-99"] + extra_params,
+        ).fetchall()
+    elif extra_filters:
+        where = " AND ".join(extra_filters)
+        rows = conn.execute(
+            build(where=where) + limit_clause, extra_params,
         ).fetchall()
     else:
         rows = conn.execute(
