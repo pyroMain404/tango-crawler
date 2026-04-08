@@ -231,8 +231,11 @@ def normalize(source_path: str, dest_path: str) -> None:
 
     # Solo ora è sicuro svuotare tracks.db
     src.execute("DELETE FROM tracks")
-    src.execute("VACUUM")
     src.commit()
+    # VACUUM deve girare fuori da qualsiasi transazione
+    src.isolation_level = None
+    src.execute("VACUUM")
+    src.isolation_level = ""
 
     src.close()
     dest.close()
