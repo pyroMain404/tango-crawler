@@ -58,12 +58,14 @@ info "Build immagine Docker..."
 $COMPOSE build --quiet
 success "Immagine pronta."
 
-# ── 4. Permessi su tracks.db (se esiste ed è di root) ────────────────────────
-if [ -f "$DATA_DIR/tracks.db" ] && [ "$(stat -c '%U' "$DATA_DIR/tracks.db")" = "root" ]; then
-    info "Correggo proprietario di tracks.db..."
-    sudo chown "$USER" "$DATA_DIR/tracks.db"
-    success "Proprietario corretto."
-fi
+# ── 4. Permessi sulla directory dati (file creati da Docker sono di root) ─────
+for dbfile in "$DATA_DIR"/*.db "$DATA_DIR"/*.log; do
+    [ -f "$dbfile" ] || continue
+    if [ "$(stat -c '%U' "$dbfile")" = "root" ]; then
+        info "Correggo proprietario di $(basename "$dbfile")..."
+        sudo chown "$USER" "$dbfile"
+    fi
+done
 
 # ── 5. Migrazione/pulizia DB ──────────────────────────────────────────────────
 if [ -f "$DATA_DIR/tracks.db" ]; then
