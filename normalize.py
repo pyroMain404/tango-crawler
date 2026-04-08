@@ -232,12 +232,12 @@ def normalize(source_path: str, dest_path: str) -> None:
     # Solo ora è sicuro svuotare tracks.db
     src.execute("DELETE FROM tracks")
     src.commit()
-    # VACUUM deve girare fuori da qualsiasi transazione
-    src.isolation_level = None
-    src.execute("VACUUM")
-    src.isolation_level = ""
-
     src.close()
+
+    # VACUUM richiede una connessione senza transazioni aperte
+    vac = sqlite3.connect(source_path, isolation_level=None)
+    vac.execute("VACUUM")
+    vac.close()
     dest.close()
     print(f"OK: {inserted} inseriti, {skipped} già presenti. tracks.db svuotato.")
 
