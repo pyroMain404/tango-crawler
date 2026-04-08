@@ -14,7 +14,6 @@ import os
 import re
 import sqlite3
 import sys
-from datetime import datetime
 
 from common import DEFAULT_PROGRAM, PROGRAMS
 
@@ -73,6 +72,7 @@ CREATE TABLE IF NOT EXISTS playlist_items (
     note         TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_playlist_items_playlist ON playlist_items(playlist_id);
+CREATE INDEX IF NOT EXISTS idx_play_singers_singer     ON play_singers(singer_id);
 CREATE INDEX IF NOT EXISTS idx_plays_orchestra ON plays(orchestra_id);
 CREATE INDEX IF NOT EXISTS idx_plays_title     ON plays(title_id);
 CREATE INDEX IF NOT EXISTS idx_plays_year      ON plays(year);
@@ -223,10 +223,19 @@ def similar_titles(dest_path: str, threshold: float, limit: int) -> None:
         print("Nessun titolo nel database.")
         return
 
+    max_len_diff = 1 - threshold
+    sm = difflib.SequenceMatcher(autojunk=False)
     pairs = []
     for i in range(len(rows)):
+        sm.set_seq1(rows[i][1])
+        len_a = len(rows[i][1])
         for j in range(i + 1, len(rows)):
-            ratio = difflib.SequenceMatcher(None, rows[i][1], rows[j][1]).ratio()
+            len_b = len(rows[j][1])
+            longer = max(len_a, len_b)
+            if longer and abs(len_a - len_b) / longer > max_len_diff:
+                continue
+            sm.set_seq2(rows[j][1])
+            ratio = sm.ratio()
             if ratio >= threshold:
                 pairs.append((rows[i][1], rows[j][1], ratio))
 
@@ -270,9 +279,7 @@ def boundary_tracks(dest_path: str, minutes: int, limit: int) -> None:
     where = " OR ".join(conditions)
     limit_clause = f" LIMIT {limit}" if limit else ""
     rows = conn.execute(f"""
-        SELECT p.fetched_at, o.name, t.name, p.year, pr.name,
-               CAST(strftime('%H', p.fetched_at) AS INT) AS hour,
-               CAST(strftime('%M', p.fetched_at) AS INT) AS min
+        SELECT p.fetched_at, o.name, t.name, p.year, pr.name
         FROM plays p
         LEFT JOIN orchestras o  ON o.id = p.orchestra_id
         LEFT JOIN titles t      ON t.id = p.title_id
@@ -287,7 +294,7 @@ def boundary_tracks(dest_path: str, minutes: int, limit: int) -> None:
         return
 
     for row in rows:
-        fetched_at, orchestra, title, year, program, h, m = row
+        fetched_at, orchestra, title, year, program = row
         year_str = f" ({year})" if year else ""
         slot = f"[{program}]  " if program else ""
         print(f"  {fetched_at}  {slot}{orchestra or '?'} — {title or '?'}{year_str}")

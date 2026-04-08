@@ -112,6 +112,44 @@ def fmt_ranking(rows, label: str = "risultati") -> None:
     print(f"\n{len(rows)} {label}.")
 
 
+_STATS = {
+    "top_orchestras": (
+        "SELECT o.name, COUNT(*) n FROM plays p "
+        "JOIN orchestras o ON o.id = p.orchestra_id "
+        "GROUP BY o.id ORDER BY n DESC",
+        "orchestre",
+    ),
+    "top_titles": (
+        "SELECT t.name, o.name, COUNT(*) n FROM plays p "
+        "JOIN titles t ON t.id = p.title_id "
+        "JOIN orchestras o ON o.id = p.orchestra_id "
+        "GROUP BY p.title_id ORDER BY n DESC",
+        "titoli",
+    ),
+    "top_singers": (
+        "SELECT s.name, COUNT(*) n FROM play_singers ps "
+        "JOIN singers s ON s.id = ps.singer_id "
+        "GROUP BY s.id ORDER BY n DESC",
+        "cantanti",
+    ),
+    "programs": (
+        "SELECT pr.name, COUNT(*) n FROM plays p "
+        "JOIN programs pr ON pr.id = p.program_id "
+        "GROUP BY pr.id ORDER BY n DESC",
+        "fasce orarie",
+    ),
+}
+
+
+def _run_stats(key: str, limit: int) -> None:
+    sql, label = _STATS[key]
+    lc = f" LIMIT {limit}" if limit else ""
+    conn = sqlite3.connect(TANGO_DB)
+    rows = conn.execute(sql + lc).fetchall()
+    conn.close()
+    fmt_ranking(rows, label)
+
+
 def main():
     parser = argparse.ArgumentParser(description="Interroga il DB dei brani")
     parser.add_argument("hours",  nargs="?",  help="Fascia oraria: '13' o '13-14'")
@@ -139,60 +177,23 @@ def main():
 
     limit_clause = f" LIMIT {args.limit}" if args.limit else ""
 
-    if args.top_orchestras:
-        conn = sqlite3.connect(TANGO_DB)
-        rows = conn.execute(f"""
-            SELECT o.name, COUNT(*) n FROM plays p
-            JOIN orchestras o ON o.id = p.orchestra_id
-            GROUP BY o.id ORDER BY n DESC{limit_clause}
-        """).fetchall()
-        conn.close()
-        fmt_ranking(rows, "orchestre")
-        return
-
-    if args.top_titles:
-        conn = sqlite3.connect(TANGO_DB)
-        rows = conn.execute(f"""
-            SELECT t.name, o.name, COUNT(*) n FROM plays p
-            JOIN titles t ON t.id = p.title_id
-            JOIN orchestras o ON o.id = p.orchestra_id
-            GROUP BY p.title_id ORDER BY n DESC{limit_clause}
-        """).fetchall()
-        conn.close()
-        fmt_ranking(rows, "titoli")
-        return
-
-    if args.top_singers:
-        conn = sqlite3.connect(TANGO_DB)
-        rows = conn.execute(f"""
-            SELECT s.name, COUNT(*) n FROM play_singers ps
-            JOIN singers s ON s.id = ps.singer_id
-            GROUP BY s.id ORDER BY n DESC{limit_clause}
-        """).fetchall()
-        conn.close()
-        fmt_ranking(rows, "cantanti")
-        return
-
-    if args.programs:
-        conn = sqlite3.connect(TANGO_DB)
-        rows = conn.execute(f"""
-            SELECT pr.name, COUNT(*) n FROM plays p
-            JOIN programs pr ON pr.id = p.program_id
-            GROUP BY pr.id ORDER BY n DESC{limit_clause}
-        """).fetchall()
-        conn.close()
-        fmt_ranking(rows, "fasce orarie")
-        return
+    for key in _STATS:
+        if getattr(args, key, False):
+            _run_stats(key, args.limit)
+            return
 
     if args.catalog:
         conn = sqlite3.connect(TANGO_DB)
         filters = []
+        params = []
         if args.orchestra:
-            filters.append(f"UPPER(orchestra) LIKE UPPER('%{args.orchestra}%')")
+            filters.append("UPPER(orchestra) LIKE UPPER(?)")
+            params.append(f"%{args.orchestra}%")
         if args.title:
-            filters.append(f"UPPER(title) LIKE UPPER('%{args.title}%')")
+            filters.append("UPPER(title) LIKE UPPER(?)")
+            params.append(f"%{args.title}%")
         where = " AND ".join(filters)
-        rows  = conn.execute(_catalog_query(where) + limit_clause).fetchall()
+        rows  = conn.execute(_catalog_query(where) + limit_clause, params).fetchall()
         conn.close()
         if not rows:
             print("Nessun risultato.")
@@ -215,21 +216,21 @@ def main():
         day = args.date or date.today().isoformat()
         h_from, h_to = parse_hour_range(args.hours)
         rows = conn.execute(
-            build(where=f"{ts} BETWEEN ? AND ?"),
+            build(where=f"{ts} BETWEEN ? AND ?") + limit_clause,
             (f"{day}T{h_from}:00:00", f"{day}T{h_to}:59:59"),
         ).fetchall()
     elif args.date:
         rows = conn.execute(
-            build(where=f"{ts} LIKE ?"), (f"{args.date}%",)
+            build(where=f"{ts} LIKE ?") + limit_clause, (f"{args.date}%",)
         ).fetchall()
     elif args.from_ts or args.to_ts:
         rows = conn.execute(
-            build(where=f"{ts} BETWEEN ? AND ?"),
+            build(where=f"{ts} BETWEEN ? AND ?") + limit_clause,
             (args.from_ts or "0000-00-00", args.to_ts or "9999-99-99"),
         ).fetchall()
     else:
         rows = conn.execute(
-            build(where=f"{ts} LIKE ?"), (f"{date.today().isoformat()}%",)
+            build(where=f"{ts} LIKE ?") + limit_clause, (f"{date.today().isoformat()}%",)
         ).fetchall()
 
     conn.close()
@@ -237,9 +238,6 @@ def main():
     if not rows:
         print("Nessun risultato.")
         return
-
-    if args.limit and len(rows) > args.limit:
-        rows = rows[:args.limit]
 
     for row in rows:
         print(fmt(row))

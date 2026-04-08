@@ -1,0 +1,128 @@
+#!/bin/bash
+# tango — CLI principale per tango-crawler.
+# Wrappa tutti gli script Python e bash del progetto.
+set -euo pipefail
+
+REPO_DIR="$(cd "$(dirname "$0")" && pwd)"
+DATA_DIR="$HOME/.local/share/tango-crawler"
+
+usage() {
+    cat <<'EOF'
+tango-crawler — CLI
+
+Uso: tango <comando> [opzioni]
+
+Comandi:
+  status                Stato del sistema (crawler, DB, cron)
+  setup [build|fresh]   Setup iniziale o rebuild
+  normalize             Normalizza tracks.db → tango.db (subito)
+  convert               Manutenzione tracks.db (migrazione, reparse, fix-tz)
+  query                 Interroga brani per data/ora/range
+  catalog               Catalogo brani unici
+  stats                 Statistiche di riproduzione
+  similar-titles        Trova titoli simili per normalizzazione
+  boundary              Brani a cavallo delle fasce di palinsesto
+  logs                  Log del crawler (docker compose logs -f)
+  help                  Mostra questo messaggio
+
+Esempi:
+  tango status
+  tango query --last 20
+  tango query 13-14 --date 2026-04-01
+  tango catalog --orchestra "DI SARLI"
+  tango stats orchestras --limit 10
+  tango stats titles --limit 20
+  tango stats singers
+  tango stats programs
+  tango normalize
+  tango similar-titles --threshold 0.85 --limit 20
+  tango boundary --minutes 3
+  tango setup build
+  tango convert --reparse
+  tango logs
+EOF
+}
+
+case "${1:-help}" in
+
+    status)
+        "$REPO_DIR/status.sh"
+        ;;
+
+    setup)
+        shift
+        "$REPO_DIR/setup.sh" "$@"
+        ;;
+
+    normalize)
+        "$REPO_DIR/status.sh" normalize
+        ;;
+
+    convert)
+        shift
+        python3 "$REPO_DIR/convert.py" --db "$DATA_DIR/tracks.db" "$@"
+        ;;
+
+    query)
+        shift
+        python3 "$REPO_DIR/query.py" "$@"
+        ;;
+
+    catalog)
+        shift
+        python3 "$REPO_DIR/query.py" --catalog "$@"
+        ;;
+
+    stats)
+        sub="${2:-}"
+        shift; [ $# -gt 0 ] && shift
+        case "$sub" in
+            orchestras|orchestra)
+                python3 "$REPO_DIR/query.py" --top-orchestras "$@"
+                ;;
+            titles|title)
+                python3 "$REPO_DIR/query.py" --top-titles "$@"
+                ;;
+            singers|singer)
+                python3 "$REPO_DIR/query.py" --top-singers "$@"
+                ;;
+            programs|program)
+                python3 "$REPO_DIR/query.py" --programs "$@"
+                ;;
+            "")
+                echo "Uso: tango stats <orchestras|titles|singers|programs> [--limit N]"
+                exit 1
+                ;;
+            *)
+                echo "Statistiche sconosciute: $sub"
+                echo "Uso: tango stats <orchestras|titles|singers|programs> [--limit N]"
+                exit 1
+                ;;
+        esac
+        ;;
+
+    similar-titles)
+        shift
+        python3 "$REPO_DIR/normalize.py" similar-titles "$@"
+        ;;
+
+    boundary)
+        shift
+        python3 "$REPO_DIR/normalize.py" boundary "$@"
+        ;;
+
+    logs)
+        docker compose -f "$REPO_DIR/docker-compose.yml" logs -f
+        ;;
+
+    help|--help|-h)
+        usage
+        ;;
+
+    *)
+        echo "Comando sconosciuto: $1"
+        echo ""
+        usage
+        exit 1
+        ;;
+esac

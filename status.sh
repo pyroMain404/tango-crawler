@@ -61,5 +61,5 @@ else
 fi
 
 echo ""
-echo "Comandi: ./status.sh normalize   (normalizza subito)"
+echo "Comandi: ./tango help"
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
