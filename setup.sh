@@ -29,6 +29,16 @@ if [ "$MODE" = "build" ]; then
     exit 0
 fi
 
+# ── Modalità fresh: build + setup completo ────────────────────────────────────
+if [ "$MODE" = "fresh" ]; then
+    info "Stop crawler..."
+    $COMPOSE down
+    info "Aggiorno repo..."
+    git -C "$REPO_DIR" pull
+    info "Rilancio setup completo con rebuild..."
+    exec "$0"
+fi
+
 # ── 1. Directory dati ─────────────────────────────────────────────────────────
 info "Creo directory dati: $DATA_DIR"
 mkdir -p "$DATA_DIR"
@@ -68,10 +78,10 @@ fi
 CRON_HOUR=$(echo "$NORMALIZE_AT" | cut -d: -f1)
 CRON_MIN=$(echo  "$NORMALIZE_AT" | cut -d: -f2)
 DOCKER_BIN="$(which docker)"
-CRON_CMD="$CRON_MIN $CRON_HOUR * * * \"$DOCKER_BIN\" compose -f $REPO_DIR/docker-compose.yml --profile normalize run --rm normalizer >> $DATA_DIR/normalize.log 2>&1"
+CRON_CMD="$CRON_MIN $CRON_HOUR * * * \"$DOCKER_BIN\" compose -f $REPO_DIR/docker-compose.yml --profile normalize run --rm normalizer >> $DATA_DIR/normalize.log 2>&1 # tango-normalize"
 
 # Rimuove eventuali voci precedenti, aggiunge quella aggiornata
-( crontab -l 2>/dev/null | grep -v "tango-crawler"; echo "$CRON_CMD" ) | crontab -
+( crontab -l 2>/dev/null | grep -v "# tango-normalize"; echo "$CRON_CMD" ) | crontab -
 success "Cron job configurato: normalizzazione ogni giorno alle $NORMALIZE_AT."
 
 # ── 7. Avvio crawler ──────────────────────────────────────────────────────────
