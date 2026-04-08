@@ -81,7 +81,7 @@ DOCKER_BIN="$(which docker)"
 CRON_CMD="$CRON_MIN $CRON_HOUR * * * \"$DOCKER_BIN\" compose -f $REPO_DIR/docker-compose.yml --profile normalize run --rm normalizer >> $DATA_DIR/normalize.log 2>&1 # tango-normalize"
 
 # Rimuove eventuali voci precedenti, aggiunge quella aggiornata
-( crontab -l 2>/dev/null | grep -v "# tango-normalize"; echo "$CRON_CMD" ) | crontab -
+( crontab -l 2>/dev/null | { grep -v "# tango-normalize" || true; }; echo "$CRON_CMD" ) | crontab -
 success "Cron job configurato: normalizzazione ogni giorno alle $NORMALIZE_AT."
 
 # ── 7. Avvio crawler ──────────────────────────────────────────────────────────
