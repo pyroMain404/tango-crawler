@@ -17,6 +17,10 @@ Esempi:
   python query.py --catalog                        # tutti i brani unici
   python query.py --catalog --orchestra "DI SARLI" # catalogo di un'orchestra
   python query.py --catalog --title "cumparsita"   # cerca un titolo
+  python query.py --top-orchestras                 # orchestre più riprodotte
+  python query.py --top-titles --limit 20          # titoli più riprodotti (top 20)
+  python query.py --top-singers --limit 10         # cantanti più riprodotti
+  python query.py --programs                       # passaggi per fascia oraria
 """
 import argparse
 import os
@@ -95,6 +99,19 @@ def fmt_catalog(row) -> str:
     return f"{orchestra} — {title}{year_str}{author_str}  ×{times_played}  ultimo: {last_seen[:10]}"
 
 
+def fmt_ranking(rows, label: str = "risultati") -> None:
+    if not rows:
+        print("Nessun risultato.")
+        return
+    max_name = max(len(str(r[0])) for r in rows)
+    for i, row in enumerate(rows, 1):
+        name  = str(row[0])
+        count = row[-1]
+        extra = f"  ({row[1]})" if len(row) == 3 else ""
+        print(f"  {i:>3}.  {name:<{max_name}}{extra}  {count:>6}")
+    print(f"\n{len(rows)} {label}.")
+
+
 def main():
     parser = argparse.ArgumentParser(description="Interroga il DB dei brani")
     parser.add_argument("hours",  nargs="?",  help="Fascia oraria: '13' o '13-14'")
@@ -108,7 +125,64 @@ def main():
                         help="Catalogo brani unici (orchestra+titolo) con conteggio passaggi")
     parser.add_argument("--orchestra", help="Filtra catalogo per orchestra (LIKE, case-insensitive)")
     parser.add_argument("--title",     help="Filtra catalogo per titolo (LIKE, case-insensitive)")
+    parser.add_argument("--top-orchestras", action="store_true",
+                        help="Orchestre ordinate per numero di passaggi")
+    parser.add_argument("--top-titles", action="store_true",
+                        help="Titoli ordinati per numero di passaggi")
+    parser.add_argument("--top-singers", action="store_true",
+                        help="Cantanti ordinati per numero di passaggi")
+    parser.add_argument("--programs", action="store_true",
+                        help="Passaggi per fascia di palinsesto")
+    parser.add_argument("--limit", type=int, default=0,
+                        help="Limita il numero di righe stampate")
     args = parser.parse_args()
+
+    limit_clause = f" LIMIT {args.limit}" if args.limit else ""
+
+    if args.top_orchestras:
+        conn = sqlite3.connect(TANGO_DB)
+        rows = conn.execute(f"""
+            SELECT o.name, COUNT(*) n FROM plays p
+            JOIN orchestras o ON o.id = p.orchestra_id
+            GROUP BY o.id ORDER BY n DESC{limit_clause}
+        """).fetchall()
+        conn.close()
+        fmt_ranking(rows, "orchestre")
+        return
+
+    if args.top_titles:
+        conn = sqlite3.connect(TANGO_DB)
+        rows = conn.execute(f"""
+            SELECT t.name, o.name, COUNT(*) n FROM plays p
+            JOIN titles t ON t.id = p.title_id
+            JOIN orchestras o ON o.id = p.orchestra_id
+            GROUP BY p.title_id ORDER BY n DESC{limit_clause}
+        """).fetchall()
+        conn.close()
+        fmt_ranking(rows, "titoli")
+        return
+
+    if args.top_singers:
+        conn = sqlite3.connect(TANGO_DB)
+        rows = conn.execute(f"""
+            SELECT s.name, COUNT(*) n FROM play_singers ps
+            JOIN singers s ON s.id = ps.singer_id
+            GROUP BY s.id ORDER BY n DESC{limit_clause}
+        """).fetchall()
+        conn.close()
+        fmt_ranking(rows, "cantanti")
+        return
+
+    if args.programs:
+        conn = sqlite3.connect(TANGO_DB)
+        rows = conn.execute(f"""
+            SELECT pr.name, COUNT(*) n FROM plays p
+            JOIN programs pr ON pr.id = p.program_id
+            GROUP BY pr.id ORDER BY n DESC{limit_clause}
+        """).fetchall()
+        conn.close()
+        fmt_ranking(rows, "fasce orarie")
+        return
 
     if args.catalog:
         conn = sqlite3.connect(TANGO_DB)
@@ -118,7 +192,7 @@ def main():
         if args.title:
             filters.append(f"UPPER(title) LIKE UPPER('%{args.title}%')")
         where = " AND ".join(filters)
-        rows  = conn.execute(_catalog_query(where)).fetchall()
+        rows  = conn.execute(_catalog_query(where) + limit_clause).fetchall()
         conn.close()
         if not rows:
             print("Nessun risultato.")
@@ -163,6 +237,9 @@ def main():
     if not rows:
         print("Nessun risultato.")
         return
+
+    if args.limit and len(rows) > args.limit:
+        rows = rows[:args.limit]
 
     for row in rows:
         print(fmt(row))

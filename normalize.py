@@ -1,48 +1,20 @@
 #!/usr/bin/env python3
 """
-Normalizza tracks.db → tango.db con schema relazionale completo.
-Svuota tracks.db SOLO se tutti i record sono stati scritti correttamente.
+Gestione tango.db — normalizzazione, analisi titoli, confini palinsesto.
 
-Da eseguire una volta al giorno (es. alle 06:00).
-
-Uso:
-  python normalize.py [--source /data/tracks.db] [--dest /data/tango.db]
-
-Schema tango.db:
-  orchestras   (id, name)
-  singers      (id, name)
-  titles       (id, name)
-  programs     (id, name, start_hour, end_hour)
-  plays        (id, orchestra_id, title_id, year, author, dancers, program_id, fetched_at)
-  play_singers (play_id, singer_id)   ← N:M per cantanti multipli
-
-Query utili:
-  -- Orchestre più suonate
-  SELECT o.name, COUNT(*) n FROM plays p JOIN orchestras o ON o.id=p.orchestra_id
-  GROUP BY o.id ORDER BY n DESC LIMIT 20;
-
-  -- Tutti i brani di Di Sarli
-  SELECT t.name, p.year, p.fetched_at FROM plays p
-  JOIN orchestras o ON o.id=p.orchestra_id
-  JOIN titles t ON t.id=p.title_id
-  WHERE o.name LIKE '%DI SARLI%' ORDER BY p.fetched_at;
-
-  -- Cantanti di Troilo
-  SELECT DISTINCT s.name FROM plays p
-  JOIN orchestras o ON o.id=p.orchestra_id
-  JOIN play_singers ps ON ps.play_id=p.id
-  JOIN singers s ON s.id=ps.singer_id
-  WHERE o.name LIKE '%TROILO%';
-
-  -- Passaggi per fascia di palinsesto
-  SELECT pr.name, COUNT(*) FROM plays p JOIN programs pr ON pr.id=p.program_id
-  GROUP BY pr.id ORDER BY 2 DESC;
+Comandi:
+  python normalize.py                                  # ingest (default)
+  python normalize.py ingest [--source X] [--dest Y]   # normalizza tracks.db → tango.db
+  python normalize.py similar-titles [--threshold 0.8] [--limit N]
+  python normalize.py boundary [--minutes 5] [--limit N]
 """
 import argparse
+import difflib
 import os
 import re
 import sqlite3
 import sys
+from datetime import datetime
 
 from common import DEFAULT_PROGRAM, PROGRAMS
 
@@ -242,12 +214,121 @@ def normalize(source_path: str, dest_path: str) -> None:
     print(f"OK: {inserted} inseriti, {skipped} già presenti. tracks.db svuotato.")
 
 
+def similar_titles(dest_path: str, threshold: float, limit: int) -> None:
+    conn = sqlite3.connect(dest_path)
+    rows = conn.execute("SELECT id, name FROM titles ORDER BY name").fetchall()
+    conn.close()
+
+    if not rows:
+        print("Nessun titolo nel database.")
+        return
+
+    pairs = []
+    for i in range(len(rows)):
+        for j in range(i + 1, len(rows)):
+            ratio = difflib.SequenceMatcher(None, rows[i][1], rows[j][1]).ratio()
+            if ratio >= threshold:
+                pairs.append((rows[i][1], rows[j][1], ratio))
+
+    pairs.sort(key=lambda x: x[2], reverse=True)
+    if limit:
+        pairs = pairs[:limit]
+
+    if not pairs:
+        print(f"Nessun titolo simile con soglia {threshold}.")
+        return
+
+    for a, b, ratio in pairs:
+        print(f'  "{a}" ~ "{b}"  ({ratio:.2f})')
+    print(f"\n{len(pairs)} coppie trovate.")
+
+
+def boundary_tracks(dest_path: str, minutes: int, limit: int) -> None:
+    # Calcola le ore di confine dalle fasce di palinsesto
+    boundaries = set()
+    for start, end, _ in PROGRAMS:
+        boundaries.add(start)
+        boundaries.add(end)
+
+    conn = sqlite3.connect(dest_path)
+
+    # Per ogni confine, cerca brani entro N minuti prima/dopo
+    conditions = []
+    for h in sorted(boundaries):
+        # Ultimi N minuti prima del confine (h-1):MM >= 60-minutes
+        prev_h = (h - 1) % 24
+        conditions.append(
+            f"(CAST(strftime('%H', p.fetched_at) AS INT) = {prev_h} "
+            f"AND CAST(strftime('%M', p.fetched_at) AS INT) >= {60 - minutes})"
+        )
+        # Primi N minuti dopo il confine (h):MM < minutes
+        conditions.append(
+            f"(CAST(strftime('%H', p.fetched_at) AS INT) = {h} "
+            f"AND CAST(strftime('%M', p.fetched_at) AS INT) < {minutes})"
+        )
+
+    where = " OR ".join(conditions)
+    limit_clause = f" LIMIT {limit}" if limit else ""
+    rows = conn.execute(f"""
+        SELECT p.fetched_at, o.name, t.name, p.year, pr.name,
+               CAST(strftime('%H', p.fetched_at) AS INT) AS hour,
+               CAST(strftime('%M', p.fetched_at) AS INT) AS min
+        FROM plays p
+        LEFT JOIN orchestras o  ON o.id = p.orchestra_id
+        LEFT JOIN titles t      ON t.id = p.title_id
+        LEFT JOIN programs pr   ON pr.id = p.program_id
+        WHERE {where}
+        ORDER BY p.fetched_at{limit_clause}
+    """).fetchall()
+    conn.close()
+
+    if not rows:
+        print(f"Nessun brano a cavallo delle fasce (±{minutes} min).")
+        return
+
+    for row in rows:
+        fetched_at, orchestra, title, year, program, h, m = row
+        year_str = f" ({year})" if year else ""
+        slot = f"[{program}]  " if program else ""
+        print(f"  {fetched_at}  {slot}{orchestra or '?'} — {title or '?'}{year_str}")
+    print(f"\n{len(rows)} brani a cavallo delle fasce.")
+
+
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Normalizza tracks.db → tango.db")
-    parser.add_argument("--source", default=SOURCE_DB)
-    parser.add_argument("--dest",   default=DEST_DB)
+    parser = argparse.ArgumentParser(description="Gestione tango.db")
+    sub = parser.add_subparsers(dest="command")
+
+    # ingest (default)
+    p_ingest = sub.add_parser("ingest", help="Normalizza tracks.db → tango.db")
+    p_ingest.add_argument("--source", default=SOURCE_DB)
+    p_ingest.add_argument("--dest",   default=DEST_DB)
+
+    # similar-titles
+    p_similar = sub.add_parser("similar-titles", help="Trova titoli simili")
+    p_similar.add_argument("--dest",      default=DEST_DB)
+    p_similar.add_argument("--threshold", type=float, default=0.8,
+                           help="Soglia di similarità 0.0-1.0 (default: 0.8)")
+    p_similar.add_argument("--limit", type=int, default=0,
+                           help="Limita il numero di risultati")
+
+    # boundary
+    p_boundary = sub.add_parser("boundary", help="Brani a cavallo delle fasce di palinsesto")
+    p_boundary.add_argument("--dest",    default=DEST_DB)
+    p_boundary.add_argument("--minutes", type=int, default=5,
+                            help="Minuti di margine dal confine (default: 5)")
+    p_boundary.add_argument("--limit", type=int, default=0,
+                            help="Limita il numero di risultati")
+
     args = parser.parse_args()
-    normalize(args.source, args.dest)
+
+    if args.command is None or args.command == "ingest":
+        source = getattr(args, "source", SOURCE_DB)
+        dest   = getattr(args, "dest",   DEST_DB)
+        normalize(source, dest)
+    elif args.command == "similar-titles":
+        similar_titles(args.dest, args.threshold, args.limit)
+    elif args.command == "boundary":
+        boundary_tracks(args.dest, args.minutes, args.limit)
 
 
 if __name__ == "__main__":
