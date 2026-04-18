@@ -6,7 +6,7 @@ from datetime import datetime
 
 import requests
 
-from common import get_program, parse_track
+from common import get_program, parse_track, JINGLE_ORCHESTRAS
 
 # --- Config (all overridable via env vars) ---
 FETCH_URL       = os.getenv("FETCH_URL",       "https://play5.newradio.it/stream/onairtxt/3881")
@@ -119,6 +119,10 @@ def main() -> None:
             log.info("Raw: '%s'", raw_title)
             if not parsed.get('orchestra') or not parsed.get('track_title'):
                 log.warning("Parsing degradato: raw='%s' parsed=%s", raw_title, parsed)
+            if (parsed.get('orchestra') or '').upper() in JINGLE_ORCHESTRAS:
+                log.debug("Ignorato (jingle): '%s'", raw_title)
+                time.sleep(NORMAL_INTERVAL)
+                continue
             insert_track(conn, raw_title, now, parsed)
             log.info("Salvato [%s] %s / %s",
                      get_program(now.hour),

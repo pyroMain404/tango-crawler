@@ -7,6 +7,7 @@ Comandi:
   python normalize.py ingest [--source X] [--dest Y]   # normalizza tracks.db → tango.db
   python normalize.py similar-titles [--threshold 0.8] [--limit N]
   python normalize.py boundary [--minutes 5] [--limit N]
+  python normalize.py purge [--source X] [--dest Y]    # elimina jingle ed errori da entrambi i DB
 """
 import argparse
 import difflib
@@ -15,7 +16,7 @@ import re
 import sqlite3
 import sys
 
-from common import DEFAULT_PROGRAM, PROGRAMS
+from common import DEFAULT_PROGRAM, JINGLE_ORCHESTRAS, PROGRAMS
 
 SOURCE_DB  = os.getenv("DB_PATH",       "/data/tracks.db")
 DEST_DB    = os.getenv("NORMALIZED_DB", "/data/tango.db")
@@ -152,6 +153,13 @@ def normalize(source_path: str, dest_path: str) -> None:
     try:
         for (orchestra, singer, track_title, year, author,
              dancers, program, fetched_at) in rows:
+
+            if not orchestra or not track_title:
+                skipped += 1
+                continue
+            if orchestra.upper() in JINGLE_ORCHESTRAS:
+                skipped += 1
+                continue
 
             orchestra_id = get_or_create(dest, "orchestras", "name", orchestra)
             title_id     = get_or_create(dest, "titles",     "name", track_title)
@@ -301,6 +309,57 @@ def boundary_tracks(dest_path: str, minutes: int, limit: int) -> None:
     print(f"\n{len(rows)} brani a cavallo delle fasce.")
 
 
+def purge(source_path: str, dest_path: str) -> None:
+    jingles = tuple(JINGLE_ORCHESTRAS)
+    placeholders = ",".join("?" * len(jingles))
+
+    # --- tracks.db ---
+    src = sqlite3.connect(source_path)
+    cur = src.execute(
+        f"DELETE FROM tracks WHERE UPPER(orchestra) IN ({placeholders}) "
+        "OR orchestra IS NULL OR track_title IS NULL",
+        jingles,
+    )
+    n_tracks = cur.rowcount
+    src.commit()
+    src.close()
+
+    # --- tango.db ---
+    dest = sqlite3.connect(dest_path)
+    dest.execute("PRAGMA foreign_keys = ON")
+
+    dest.execute(
+        f"DELETE FROM plays WHERE orchestra_id IN ("
+        f"  SELECT id FROM orchestras WHERE UPPER(name) IN ({placeholders})"
+        f")",
+        jingles,
+    )
+    dest.execute("DELETE FROM plays WHERE title_id IS NULL OR orchestra_id IS NULL")
+
+    dest.execute(
+        "DELETE FROM orchestras WHERE id NOT IN ("
+        "  SELECT orchestra_id FROM plays        WHERE orchestra_id IS NOT NULL"
+        "  UNION"
+        "  SELECT orchestra_id FROM playlist_items WHERE orchestra_id IS NOT NULL"
+        ")"
+    )
+    dest.execute(
+        "DELETE FROM titles WHERE id NOT IN ("
+        "  SELECT title_id FROM plays          WHERE title_id IS NOT NULL"
+        "  UNION"
+        "  SELECT title_id FROM playlist_items WHERE title_id IS NOT NULL"
+        ")"
+    )
+    dest.execute(
+        "DELETE FROM singers WHERE id NOT IN (SELECT singer_id FROM play_singers)"
+    )
+    dest.commit()
+    dest.close()
+
+    print(f"tracks.db: {n_tracks} righe eliminate.")
+    print("tango.db: jingle e brani incompleti eliminati, entità orfane ripulite.")
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="Gestione tango.db")
     sub = parser.add_subparsers(dest="command")
@@ -326,6 +385,11 @@ def main() -> None:
     p_boundary.add_argument("--limit", type=int, default=0,
                             help="Limita il numero di risultati")
 
+    # purge
+    p_purge = sub.add_parser("purge", help="Elimina jingle ed errori di parsing da entrambi i DB")
+    p_purge.add_argument("--source", default=SOURCE_DB)
+    p_purge.add_argument("--dest",   default=DEST_DB)
+
     args = parser.parse_args()
 
     if args.command is None or args.command == "ingest":
@@ -336,6 +400,8 @@ def main() -> None:
         similar_titles(args.dest, args.threshold, args.limit)
     elif args.command == "boundary":
         boundary_tracks(args.dest, args.minutes, args.limit)
+    elif args.command == "purge":
+        purge(args.source, args.dest)
 
 
 if __name__ == "__main__":

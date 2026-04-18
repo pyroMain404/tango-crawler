@@ -1,4 +1,5 @@
 """Shared parsing logic used by crawler, convert, and normalize."""
+import os
 import re
 
 PROGRAMS = [
@@ -14,9 +15,16 @@ PROGRAMS = [
 ]
 DEFAULT_PROGRAM = "1915-1985"
 
+_jingle_env = os.getenv("JINGLE_ORCHESTRAS", "TANGO PASION RADIO")
+JINGLE_ORCHESTRAS: frozenset[str] = frozenset(
+    n.strip().upper() for n in _jingle_env.split(",") if n.strip()
+)
+
 _YEAR_RE   = re.compile(r'^(19|20)\d{2}$')
 _PAREN_EXT = re.compile(r'\(([^)]*)\)')   # capture content
 _PAREN_DEL = re.compile(r'\([^)]*\)')     # delete entire group
+# Split on * only when NOT flanked by word/digit chars (avoids splitting "1915*1985")
+_SPLIT_RE  = re.compile(r'(?<!\w)\*(?!\w)')
 
 
 def get_program(hour: int) -> str:
@@ -36,7 +44,7 @@ def parse_track(raw: str) -> dict:
     author  = parens[0].strip() if parens else None
     dancers = parens[1].strip() if len(parens) > 1 else None
 
-    parts    = [p.strip() for p in _PAREN_DEL.sub('', raw).split('*') if p.strip()]
+    parts    = [p.strip() for p in _SPLIT_RE.split(_PAREN_DEL.sub('', raw)) if p.strip()]
     if not parts:
         return {'orchestra': None, 'singer': None, 'track_title': None,
                 'year': None, 'author': None, 'dancers': None}

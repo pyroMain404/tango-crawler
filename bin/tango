@@ -22,6 +22,7 @@ Comandi:
   stats                 Statistiche di riproduzione
   similar-titles        Trova titoli simili per normalizzazione
   boundary              Brani a cavallo delle fasce di palinsesto
+  purge                 Elimina jingle ed errori di parsing da entrambi i DB
   logs                  Log del crawler (docker compose logs -f)
   help                  Mostra questo messaggio
 
@@ -37,6 +38,7 @@ Esempi:
   tango normalize
   tango similar-titles --threshold 0.85 --limit 20
   tango boundary --minutes 3
+  tango purge
   tango setup build
   tango convert --reparse
   tango logs
@@ -109,6 +111,14 @@ case "${1:-help}" in
     boundary)
         shift
         python3 "$REPO_DIR/normalize.py" boundary --dest "$DATA_DIR/tango.db" "$@"
+        ;;
+
+    purge)
+        shift
+        python3 "$REPO_DIR/normalize.py" purge \
+            --source "$DATA_DIR/tracks.db" \
+            --dest   "$DATA_DIR/tango.db" \
+            "$@"
         ;;
 
     logs)
