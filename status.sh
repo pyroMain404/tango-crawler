@@ -61,5 +61,5 @@ else
 fi
 
 echo ""
-echo "Comandi: ./tango help"
+echo "Comandi: ./bin/tango help"
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
