@@ -87,9 +87,16 @@ def main() -> None:
     log.info("Avvio crawler — url=%s normal=%ds retry=%ds db=%s",
              FETCH_URL, NORMAL_INTERVAL, RETRY_INTERVAL, DB_PATH)
     conn = init_db()
+    current_program = get_program(datetime.now().hour)
+    log.info("Fascia corrente: %s", current_program)
 
     while True:
         try:
+            new_program = get_program(datetime.now().hour)
+            if new_program != current_program:
+                log.info("Cambio fascia: %s → %s", current_program, new_program)
+                current_program = new_program
+
             raw_title = fetch_title()
             if not raw_title:
                 log.warning("Titolo non trovato nella risposta, attendo %ds", RETRY_INTERVAL)
@@ -109,6 +116,9 @@ def main() -> None:
 
             now    = datetime.now()
             parsed = parse_track(raw_title)
+            log.info("Raw: '%s'", raw_title)
+            if not parsed.get('orchestra') or not parsed.get('track_title'):
+                log.warning("Parsing degradato: raw='%s' parsed=%s", raw_title, parsed)
             insert_track(conn, raw_title, now, parsed)
             log.info("Salvato [%s] %s / %s",
                      get_program(now.hour),
