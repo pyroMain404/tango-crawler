@@ -1,5 +1,4 @@
 import sqlite3
-import pytest
 
 def make_tango_db():
     conn = sqlite3.connect(":memory:")
@@ -9,6 +8,7 @@ def make_tango_db():
         CREATE TABLE titles     (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL UNIQUE);
         CREATE TABLE programs   (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL UNIQUE,
                                  start_hour INTEGER, end_hour INTEGER);
+        CREATE TABLE singers (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL UNIQUE);
         CREATE TABLE plays (
             id           INTEGER PRIMARY KEY AUTOINCREMENT,
             orchestra_id INTEGER REFERENCES orchestras(id),
@@ -24,7 +24,6 @@ def make_tango_db():
             singer_id INTEGER NOT NULL REFERENCES singers(id),
             PRIMARY KEY (play_id, singer_id)
         );
-        CREATE TABLE singers (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL UNIQUE);
     """)
     return conn
 

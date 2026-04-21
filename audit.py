@@ -12,7 +12,7 @@ import os
 import sqlite3
 from datetime import datetime
 
-from common import PROGRAMS, JINGLE_ORCHESTRAS, get_program
+from common import get_program
 
 _BASE = os.path.expanduser("~/.local/share/tango-crawler")
 DEFAULT_TRACKS = os.getenv("DB_PATH",       os.path.join(_BASE, "tracks.db"))
@@ -40,8 +40,10 @@ def section_header(title: str) -> None:
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="Analisi anomalie tango-crawler")
-    parser.add_argument("--tracks",    default=DEFAULT_TRACKS)
-    parser.add_argument("--tango",     default=DEFAULT_TANGO)
+    parser.add_argument("--tracks",    default=DEFAULT_TRACKS,
+                        help="Percorso tracks.db (default: $DB_PATH)")
+    parser.add_argument("--tango",     default=DEFAULT_TANGO,
+                        help="Percorso tango.db (default: $NORMALIZED_DB)")
     parser.add_argument("--threshold", type=float, default=0.85,
                         help="Soglia similarità titoli (default: 0.85)")
     parser.add_argument("--min-plays", type=int,   default=3,
