@@ -62,10 +62,13 @@ def parse_track(raw: str) -> dict:
     elif len(pre_year) > 2:
         singer, track_title = ', '.join(pre_year[:-1]), pre_year[-1]
 
+    def _clean(s: str | None) -> str | None:
+        return s.rstrip('*').strip() if s else s
+
     return {
-        'orchestra':   orchestra   or None,
-        'singer':      singer,
-        'track_title': track_title,
+        'orchestra':   _clean(orchestra) or None,
+        'singer':      _clean(singer),
+        'track_title': _clean(track_title),
         'year':        year,
         'author':      author,
         'dancers':     dancers,
