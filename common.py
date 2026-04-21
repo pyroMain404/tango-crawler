@@ -20,6 +20,11 @@ JINGLE_ORCHESTRAS: frozenset[str] = frozenset(
     n.strip().upper() for n in _jingle_env.split(",") if n.strip()
 )
 
+# Mappa typo → nome canonico (uppercase). Aggiungere qui nuovi alias noti.
+ORCHESTRA_ALIASES: dict[str, str] = {
+    "OSVALDO PULIESE": "OSVALDO PUGLIESE",
+}
+
 _YEAR_RE   = re.compile(r'^(19|20)\d{2}$')
 _PAREN_EXT = re.compile(r'\(([^)]*)\)')   # capture content
 _PAREN_DEL = re.compile(r'\([^)]*\)')     # delete entire group
@@ -65,8 +70,12 @@ def parse_track(raw: str) -> dict:
     def _clean(s: str | None) -> str | None:
         return s.rstrip('*').strip() if s else s
 
+    norm_orchestra = _clean(orchestra) or None
+    if norm_orchestra:
+        norm_orchestra = ORCHESTRA_ALIASES.get(norm_orchestra.upper(), norm_orchestra)
+
     return {
-        'orchestra':   _clean(orchestra) or None,
+        'orchestra':   norm_orchestra,
         'singer':      _clean(singer),
         'track_title': _clean(track_title),
         'year':        year,

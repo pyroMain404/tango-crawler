@@ -33,3 +33,8 @@ def test_trailing_asterisk_stripped_from_orchestra():
 def test_trailing_asterisk_stripped_from_singer():
     result = parse_track("CARLOS DI SARLI * ROBERTO RUFINO* * FLOR DE LINO * 1941 *")
     assert result['singer'] == "ROBERTO RUFINO"
+
+
+def test_orchestra_typo_normalized():
+    result = parse_track("OSVALDO PULIESE * LA YUMBA * 1946 *")
+    assert result['orchestra'] == "OSVALDO PUGLIESE"
