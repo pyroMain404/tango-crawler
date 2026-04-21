@@ -45,6 +45,28 @@ def make_tracks_db():
     """)
     return conn
 
+def test_check_gaps_no_gap():
+    from audit import check_gaps
+    conn = make_tracks_db()
+    conn.executemany("INSERT INTO tracks (raw_title, fetched_at) VALUES (?, ?)", [
+        ("A * B", "2026-04-01T10:00:00"),
+        ("A * B", "2026-04-01T10:05:00"),
+        ("A * B", "2026-04-01T10:10:00"),
+    ])
+    result = check_gaps(conn, gap_minutes=90)
+    assert result == []
+
+def test_check_gaps_detects_gap():
+    from audit import check_gaps
+    conn = make_tracks_db()
+    conn.executemany("INSERT INTO tracks (raw_title, fetched_at) VALUES (?, ?)", [
+        ("A * B", "2026-04-01T10:00:00"),
+        ("A * B", "2026-04-01T12:00:00"),  # 120 min gap
+    ])
+    result = check_gaps(conn, gap_minutes=90)
+    assert len(result) == 1
+    assert "120" in result[0]
+
 def test_import():
     import audit
     assert hasattr(audit, 'main')
