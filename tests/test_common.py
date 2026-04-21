@@ -28,3 +28,8 @@ def test_trailing_asterisk_stripped_from_title():
 def test_trailing_asterisk_stripped_from_orchestra():
     result = parse_track("CARLOS DI SARLI* * FLOR DE LINO * 1941 *")
     assert result['orchestra'] == "CARLOS DI SARLI"
+
+
+def test_trailing_asterisk_stripped_from_singer():
+    result = parse_track("CARLOS DI SARLI * ROBERTO RUFINO* * FLOR DE LINO * 1941 *")
+    assert result['singer'] == "ROBERTO RUFINO"
