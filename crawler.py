@@ -117,8 +117,10 @@ def main() -> None:
             now    = datetime.now()
             parsed = parse_track(raw_title)
             log.info("Raw: '%s'", raw_title)
-            if not parsed.get('orchestra') or not parsed.get('track_title'):
-                log.warning("Parsing degradato: raw='%s' parsed=%s", raw_title, parsed)
+            if not parsed.get('track_title'):
+                log.warning("Parsing degradato (skippato): raw='%s' parsed=%s", raw_title, parsed)
+                time.sleep(NORMAL_INTERVAL)
+                continue
             if (parsed.get('orchestra') or '').upper() in JINGLE_ORCHESTRAS:
                 log.debug("Ignorato (jingle): '%s'", raw_title)
                 time.sleep(NORMAL_INTERVAL)
