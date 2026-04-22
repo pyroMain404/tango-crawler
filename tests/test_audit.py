@@ -237,3 +237,24 @@ def test_check_program_mismatch_detects():
     result = check_program_mismatch(conn)
     assert len(result) == 1
     assert "15" in result[0]
+
+def test_check_temporal_duplicates_clean():
+    from audit import check_temporal_duplicates
+    conn = make_tango_db()
+    oid = _insert_orchestra(conn, "CARLOS DI SARLI")
+    tid = _insert_title(conn, "BAHIA BLANCA")
+    _insert_play(conn, oid, tid, "2026-04-01T10:00:00")
+    _insert_play(conn, oid, tid, "2026-04-01T11:00:00")  # 60 min dopo
+    result = check_temporal_duplicates(conn)
+    assert result == []
+
+def test_check_temporal_duplicates_detects():
+    from audit import check_temporal_duplicates
+    conn = make_tango_db()
+    oid = _insert_orchestra(conn, "CARLOS DI SARLI")
+    tid = _insert_title(conn, "BAHIA BLANCA")
+    _insert_play(conn, oid, tid, "2026-04-01T10:00:00")
+    _insert_play(conn, oid, tid, "2026-04-01T10:03:00")  # 3 min dopo
+    result = check_temporal_duplicates(conn)
+    assert len(result) == 1
+    assert "CARLOS DI SARLI" in result[0]

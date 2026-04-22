@@ -191,6 +191,27 @@ def check_program_mismatch(conn: sqlite3.Connection) -> list[str]:
     return findings
 
 
+def check_temporal_duplicates(conn: sqlite3.Connection) -> list[str]:
+    rows = conn.execute("""
+        SELECT a.fetched_at, b.fetched_at, o.name, t.name
+        FROM plays a
+        JOIN plays b ON a.orchestra_id = b.orchestra_id
+                     AND a.title_id    = b.title_id
+                     AND a.id < b.id
+        JOIN orchestras o ON o.id = a.orchestra_id
+        JOIN titles     t ON t.id = a.title_id
+        WHERE (julianday(b.fetched_at) - julianday(a.fetched_at)) * 1440 < 5
+        ORDER BY a.fetched_at
+    """).fetchall()
+    findings = []
+    for ts_a, ts_b, orch, title in rows:
+        diff = int(
+            (datetime.fromisoformat(ts_b) - datetime.fromisoformat(ts_a)).total_seconds() / 60
+        )
+        findings.append(f"{ts_a} + {ts_b}  ({diff} min)  {orch} — {title}")
+    return findings
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="Analisi anomalie tango-crawler")
     parser.add_argument("--tracks",    default=DEFAULT_TRACKS,
@@ -292,6 +313,15 @@ def main() -> None:
             total_issues += 1
         else:
             ok("programmi allineati agli orari reali")
+
+        sep("Duplicati temporali (stesso brano < 5 min)")
+        findings = check_temporal_duplicates(conn_n)
+        if findings:
+            for f in findings:
+                anomaly(f)
+            total_issues += 1
+        else:
+            ok("nessun duplicato temporale")
 
         conn_n.close()
 
