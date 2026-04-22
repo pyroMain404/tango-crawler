@@ -2,10 +2,15 @@
 """
 Query rapida sul DB — eseguibile direttamente sull'host senza Docker.
 
+Interfaccia principale:
+  tango query [opzioni]              → brani per data/ora
+  tango query catalog [opzioni]      → catalogo brani unici
+  tango query stats <tipo>           → statistiche
+
 Default: tango.db (storico normalizzato).
 Flag --raw: tracks.db (giornata in corso, non ancora normalizzata).
 
-Esempi:
+Esempi diretti:
   python query.py                          # oggi da tango.db
   python query.py --raw                    # oggi da tracks.db
   python query.py 13                       # ore 13:00-13:59 di oggi

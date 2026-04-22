@@ -2,7 +2,10 @@
 """
 Analisi anomalie su tracks.db e tango.db.
 
-Uso:
+Interfaccia principale:
+  tango analyze audit [opzioni]
+
+Uso diretto:
   python audit.py
   python audit.py --tracks /path/tracks.db --tango /path/tango.db
   python audit.py --threshold 0.85 --min-plays 3 --gap 90

@@ -2,7 +2,11 @@
 """
 Manutenzione di tracks.db — operazioni in-place senza ricreare lo schema.
 
-Uso:
+Interfaccia principale:
+  tango db reparse    → ricalcola orchestra/singer/titolo/anno da raw_title
+  tango db fix-tz     → correggi timestamp +2h (eseguire UNA SOLA VOLTA)
+
+Uso diretto (Docker/avanzato):
   python convert.py [--db /path/to/tracks.db] [--fix-tz] [--reparse] [--all]
 
   (senza flag) → rimuove cortine dal DB già migrato, oppure migra il vecchio schema
@@ -145,8 +149,10 @@ def migrate_schema(conn: sqlite3.Connection, db_path: str) -> None:
 def main() -> None:
     parser = argparse.ArgumentParser(description="Manutenzione di tracks.db")
     parser.add_argument("--db",      default=DB_PATH, help="Percorso al database (default: tracks.db)")
-    parser.add_argument("--fix-tz",  action="store_true", help="Correggi timestamp +2h (eseguire UNA SOLA VOLTA)")
-    parser.add_argument("--reparse", action="store_true", help="Ri-parsa raw_title con il parser attuale")
+    parser.add_argument("--fix-tz",  action="store_true",
+                        help="Correggi timestamp +2h (tango db fix-tz)")
+    parser.add_argument("--reparse", action="store_true",
+                        help="Ri-parsa raw_title con il parser attuale (tango db reparse)")
     parser.add_argument("--all",     action="store_true", help="fix-tz + reparse + pulizia cortine")
     args = parser.parse_args()
 

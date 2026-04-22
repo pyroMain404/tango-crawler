@@ -2,12 +2,18 @@
 """
 Gestione tango.db — normalizzazione, analisi titoli, confini palinsesto.
 
-Comandi:
+Interfaccia principale:
+  tango db normalize      → ingest tracks.db → tango.db
+  tango db purge          → elimina jingle ed errori da entrambi i DB
+  tango analyze similar   → trova titoli simili
+  tango analyze boundary  → brani a cavallo delle fasce di palinsesto
+
+Comandi diretti (avanzato):
   python normalize.py                                  # ingest (default)
-  python normalize.py ingest [--source X] [--dest Y]   # normalizza tracks.db → tango.db
+  python normalize.py ingest [--source X] [--dest Y]
   python normalize.py similar-titles [--threshold 0.8] [--limit N]
   python normalize.py boundary [--minutes 5] [--limit N]
-  python normalize.py purge [--source X] [--dest Y]    # elimina jingle ed errori da entrambi i DB
+  python normalize.py purge [--source X] [--dest Y]
 """
 import argparse
 import difflib
