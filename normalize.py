@@ -22,7 +22,7 @@ import re
 import sqlite3
 import sys
 
-from common import DEFAULT_PROGRAM, JINGLE_ORCHESTRAS, PROGRAMS
+from common import DEFAULT_PROGRAM, JINGLE_ORCHESTRAS, PROGRAMS, canonicalize_title
 
 SOURCE_DB  = os.getenv("DB_PATH",       "/data/tracks.db")
 DEST_DB    = os.getenv("NORMALIZED_DB", "/data/tango.db")
@@ -168,7 +168,7 @@ def normalize(source_path: str, dest_path: str) -> None:
                 continue
 
             orchestra_id = get_or_create(dest, "orchestras", "name", orchestra)
-            title_id     = get_or_create(dest, "titles",     "name", track_title)
+            title_id     = get_or_create(dest, "titles",     "name", canonicalize_title(track_title))
             program_id   = get_program_id(dest, program)
 
             cur = dest.execute("""
