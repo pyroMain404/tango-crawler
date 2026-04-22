@@ -50,12 +50,15 @@ Sottocomandi:
   fix-tz                Correggi timestamp +2h (eseguire UNA SOLA VOLTA)
   purge                 Elimina jingle ed errori di parsing da entrambi i DB
   maintain [--fix]      Verifica DB (con --fix: pulizia completa)
+  dedup [--apply]       Trova e unisce titoli quasi-duplicati (dry-run senza --apply)
 
 Esempi:
   tango db normalize
   tango db reparse
   tango db maintain
   tango db maintain --fix
+  tango db dedup
+  tango db dedup --threshold 0.95 --apply
 EOF
 }
 
@@ -158,6 +161,11 @@ case "${1:-help}" in
             maintain)
                 shift
                 "$REPO_DIR/maintain.sh" "$@"
+                ;;
+            dedup)
+                shift
+                python3 "$REPO_DIR/normalize.py" dedup \
+                    --dest "$DATA_DIR/tango.db" "$@"
                 ;;
             "")
                 usage_db
