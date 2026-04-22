@@ -31,6 +31,12 @@ _PAREN_DEL = re.compile(r'\([^)]*\)')     # delete entire group
 # Split on * only when NOT flanked by word/digit chars (avoids splitting "1915*1985")
 _SPLIT_RE  = re.compile(r'(?<!\w)\*(?!\w)')
 
+_TRAILING_PUNCT = re.compile(r'[\s.,_:]+$')
+
+
+def canonicalize_title(title: str) -> str:
+    return _TRAILING_PUNCT.sub('', title)
+
 
 def get_program(hour: int) -> str:
     for start, end, name in PROGRAMS:

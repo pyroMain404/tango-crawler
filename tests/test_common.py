@@ -38,3 +38,38 @@ def test_trailing_asterisk_stripped_from_singer():
 def test_orchestra_typo_normalized():
     result = parse_track("OSVALDO PULIESE * LA YUMBA * 1946 *")
     assert result['orchestra'] == "OSVALDO PUGLIESE"
+
+
+from common import canonicalize_title
+
+
+def test_canonicalize_strips_trailing_period():
+    assert canonicalize_title("BAHIA BLANCA.") == "BAHIA BLANCA"
+
+
+def test_canonicalize_strips_trailing_underscore():
+    assert canonicalize_title("EL INGENIERO_") == "EL INGENIERO"
+
+
+def test_canonicalize_strips_trailing_comma():
+    assert canonicalize_title("CORAZON DE ORO,") == "CORAZON DE ORO"
+
+
+def test_canonicalize_strips_trailing_colon():
+    assert canonicalize_title("LA PUNALADA:") == "LA PUNALADA"
+
+
+def test_canonicalize_strips_multiple_trailing():
+    assert canonicalize_title("TITULO..") == "TITULO"
+
+
+def test_canonicalize_no_change_for_clean_title():
+    assert canonicalize_title("BAHIA BLANCA") == "BAHIA BLANCA"
+
+
+def test_canonicalize_preserves_internal_punct():
+    assert canonicalize_title("L`HYMNE A L`AMOUR") == "L`HYMNE A L`AMOUR"
+
+
+def test_canonicalize_strips_trailing_space_with_punct():
+    assert canonicalize_title("TITULO . ") == "TITULO"
