@@ -212,6 +212,89 @@ def check_temporal_duplicates(conn: sqlite3.Connection) -> list[str]:
     return findings
 
 
+def snapshot_ai(conn: sqlite3.Connection, args: argparse.Namespace) -> None:
+    today = datetime.now().strftime("%Y-%m-%d")
+    print(f"\n=== SNAPSHOT tango.db — {today} ===\n")
+
+    # Statistiche generali
+    total_plays   = conn.execute("SELECT COUNT(*) FROM plays").fetchone()[0]
+    total_orch    = conn.execute("SELECT COUNT(*) FROM orchestras").fetchone()[0]
+    total_titles  = conn.execute("SELECT COUNT(*) FROM titles").fetchone()[0]
+    total_singers = conn.execute("SELECT COUNT(*) FROM singers").fetchone()[0]
+    first, last   = conn.execute(
+        "SELECT MIN(fetched_at), MAX(fetched_at) FROM plays"
+    ).fetchone()
+
+    print(f"Plays totali  : {total_plays}")
+    print(f"Orchestre     : {total_orch} orchestre")
+    print(f"Titoli unici  : {total_titles}")
+    print(f"Cantanti      : {total_singers}")
+    print(f"Arco temporale: {first} → {last}")
+
+    # Top 30 orchestre
+    print("\n--- Top 30 orchestre per passaggi ---")
+    rows = conn.execute("""
+        SELECT o.name, COUNT(*) n, MIN(p.year), MAX(p.year)
+        FROM plays p
+        JOIN orchestras o ON o.id = p.orchestra_id
+        GROUP BY o.id
+        ORDER BY n DESC
+        LIMIT 30
+    """).fetchall()
+    for name, cnt, yr_min, yr_max in rows:
+        yr_str = f"  {yr_min}–{yr_max}" if yr_min else ""
+        print(f"  {cnt:>5}  {name}{yr_str}")
+
+    # Distribuzione per fascia
+    print("\n--- Distribuzione per fascia di palinsesto ---")
+    rows = conn.execute("""
+        SELECT pr.name, COUNT(*) n
+        FROM plays p
+        JOIN programs pr ON pr.id = p.program_id
+        GROUP BY pr.id
+        ORDER BY n DESC
+    """).fetchall()
+    for name, cnt in rows:
+        print(f"  {cnt:>5}  {name}")
+
+    # Distribuzione per decennio
+    print("\n--- Distribuzione per decennio (anno brano) ---")
+    rows = conn.execute("""
+        SELECT (year / 10) * 10 decade, COUNT(*) n
+        FROM plays
+        WHERE year IS NOT NULL
+        GROUP BY decade
+        ORDER BY decade
+    """).fetchall()
+    for decade, cnt in rows:
+        print(f"  {decade}s: {cnt}")
+
+    # Orchestre rare con titoli
+    rare = conn.execute("""
+        SELECT o.name, COUNT(*) n,
+               GROUP_CONCAT(DISTINCT t.name) titles
+        FROM plays p
+        JOIN orchestras o ON o.id = p.orchestra_id
+        JOIN titles     t ON t.id = p.title_id
+        GROUP BY o.id
+        HAVING n < ?
+        ORDER BY n
+    """, (args.min_plays,)).fetchall()
+    if rare:
+        print(f"\n--- Orchestre rare (< {args.min_plays} passaggi) ---")
+        for name, cnt, titles in rare:
+            print(f"  {name}  ({cnt})  → {titles}")
+
+    # Coppie quasi-duplicate
+    pairs = check_similar_titles(conn, args.threshold)
+    if pairs:
+        print(f"\n--- Titoli quasi-duplicati (threshold {args.threshold}) ---")
+        for p in pairs:
+            print(f"  {p}")
+
+    print(f"\n=== FINE SNAPSHOT ===")
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="Analisi anomalie tango-crawler")
     parser.add_argument("--tracks",    default=DEFAULT_TRACKS,
@@ -322,6 +405,9 @@ def main() -> None:
             total_issues += 1
         else:
             ok("nessun duplicato temporale")
+
+        section_header("SNAPSHOT AI")
+        snapshot_ai(conn_n, args)
 
         conn_n.close()
 

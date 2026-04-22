@@ -258,3 +258,17 @@ def test_check_temporal_duplicates_detects():
     result = check_temporal_duplicates(conn)
     assert len(result) == 1
     assert "CARLOS DI SARLI" in result[0]
+
+def test_snapshot_ai_runs(capsys):
+    from audit import snapshot_ai
+    import argparse
+    conn = make_tango_db()
+    oid = _insert_orchestra(conn, "CARLOS DI SARLI")
+    tid = _insert_title(conn, "BAHIA BLANCA")
+    _insert_play(conn, oid, tid, "2026-04-01T10:00:00", year=1941)
+    args = argparse.Namespace(min_plays=3, threshold=0.85)
+    snapshot_ai(conn, args)
+    captured = capsys.readouterr()
+    assert "SNAPSHOT tango.db" in captured.out
+    assert "CARLOS DI SARLI" in captured.out
+    assert "1 orchestre" in captured.out
