@@ -161,3 +161,26 @@ def test_check_unusual_chars_detects():
     _insert_title(conn, "TANGO|BEAT")
     result = check_unusual_chars(conn)
     assert len(result) == 2
+
+def test_check_similar_titles_no_match():
+    from audit import check_similar_titles
+    conn = make_tango_db()
+    oid = _insert_orchestra(conn, "CARLOS DI SARLI")
+    for title, ts in [("BAHIA BLANCA", "2026-04-01T10:00:00"),
+                      ("LA CUMPARSITA", "2026-04-01T10:05:00")]:
+        tid = _insert_title(conn, title)
+        _insert_play(conn, oid, tid, ts)
+    result = check_similar_titles(conn, threshold=0.85)
+    assert result == []
+
+def test_check_similar_titles_detects():
+    from audit import check_similar_titles
+    conn = make_tango_db()
+    oid = _insert_orchestra(conn, "CARLOS DI SARLI")
+    for title, ts in [("BAHIA BLANCA",  "2026-04-01T10:00:00"),
+                      ("BAHIA BLANCA2", "2026-04-01T10:05:00")]:
+        tid = _insert_title(conn, title)
+        _insert_play(conn, oid, tid, ts)
+    result = check_similar_titles(conn, threshold=0.85)
+    assert len(result) == 1
+    assert "BAHIA BLANCA" in result[0]

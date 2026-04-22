@@ -8,6 +8,7 @@ Uso:
   python audit.py --threshold 0.85 --min-plays 3 --gap 90
 """
 import argparse
+import difflib
 import os
 import re
 import sqlite3
@@ -118,6 +119,32 @@ def check_unusual_chars(conn: sqlite3.Connection) -> list[str]:
     return findings
 
 
+def check_similar_titles(conn: sqlite3.Connection, threshold: float) -> list[str]:
+    rows = conn.execute("""
+        SELECT o.name, GROUP_CONCAT(t.name, '||') titles_concat
+        FROM plays p
+        JOIN orchestras o ON o.id = p.orchestra_id
+        JOIN titles     t ON t.id = p.title_id
+        GROUP BY o.id
+        HAVING COUNT(DISTINCT t.id) > 1
+    """).fetchall()
+
+    sm = difflib.SequenceMatcher(autojunk=False)
+    findings = []
+    for orch_name, titles_concat in rows:
+        titles = list(set(titles_concat.split("||")))
+        for i in range(len(titles)):
+            sm.set_seq1(titles[i])
+            for j in range(i + 1, len(titles)):
+                sm.set_seq2(titles[j])
+                ratio = sm.ratio()
+                if ratio >= threshold:
+                    findings.append(
+                        f"[{orch_name}] {titles[i]!r} ~ {titles[j]!r}  ({ratio:.2f})"
+                    )
+    return findings
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="Analisi anomalie tango-crawler")
     parser.add_argument("--tracks",    default=DEFAULT_TRACKS,
@@ -190,6 +217,15 @@ def main() -> None:
             total_issues += 1
         else:
             ok("nessun carattere insolito trovato")
+
+        sep("Titoli quasi-duplicati per stessa orchestra")
+        findings = check_similar_titles(conn_n, args.threshold)
+        if findings:
+            for f in findings:
+                anomaly(f)
+            total_issues += 1
+        else:
+            ok(f"nessuna coppia con similarità >= {args.threshold}")
 
         conn_n.close()
 
