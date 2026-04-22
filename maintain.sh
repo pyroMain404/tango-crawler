@@ -136,6 +136,10 @@ check "typo PULIESE"                          "$TANGO" "SELECT COUNT(*) FROM orc
 check "orchestre-fascia (MILONGA*)"           "$TANGO" "SELECT COUNT(*) FROM orchestras WHERE name GLOB 'MILONGA[0-9]*';"
 check "orchestre-fascia (anno*anno)"          "$TANGO" "SELECT COUNT(*) FROM orchestras o WHERE NOT EXISTS (SELECT 1 FROM plays p WHERE p.orchestra_id = o.id) AND o.name GLOB '[0-9]*';"
 
+sep "audit anomalie contenuto"
+$COMPOSE run --rm -e DB_PATH=/data/tracks.db -e NORMALIZED_DB=/data/tango.db \
+    crawler python audit.py
+
 echo ""
 if [ "$ERRORS" -eq 0 ]; then
     echo "Tutto OK — nessuna anomalia trovata."
