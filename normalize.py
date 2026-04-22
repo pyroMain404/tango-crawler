@@ -266,6 +266,96 @@ def similar_titles(dest_path: str, threshold: float, limit: int) -> None:
     print(f"\n{len(pairs)} coppie trovate.")
 
 
+def dedup_titles(dest_path: str, threshold: float, apply: bool) -> list[tuple]:
+    """
+    Trova e (opzionalmente) unisce titoli quasi-duplicati per la stessa orchestra.
+
+    Restituisce lista di tuple (canonical_name, duplicate_name, ratio, orchestra_name).
+    """
+    from collections import defaultdict
+
+    conn = sqlite3.connect(dest_path)
+    conn.execute("PRAGMA foreign_keys = ON")
+
+    rows = conn.execute("""
+        SELECT o.id, o.name, t.id, t.name, COUNT(p.id)
+        FROM plays p
+        JOIN orchestras o ON o.id = p.orchestra_id
+        JOIN titles t     ON t.id = p.title_id
+        GROUP BY o.id, t.id
+        ORDER BY o.name, t.name
+    """).fetchall()
+
+    by_orch: dict[int, list[tuple]] = defaultdict(list)
+    for orch_id, orch_name, title_id, title_name, play_count in rows:
+        by_orch[orch_id].append((orch_name, title_id, title_name, play_count))
+
+    sm = difflib.SequenceMatcher(autojunk=False)
+    pairs: list[tuple] = []
+
+    for orch_id, entries in by_orch.items():
+        seen: dict[str, tuple] = {}
+        for entry in entries:
+            name = entry[2]
+            if name not in seen:
+                seen[name] = entry
+        titles = list(seen.values())
+
+        for i in range(len(titles)):
+            orch_name_i, tid_i, tname_i, plays_i = titles[i]
+            sm.set_seq1(tname_i)
+            for j in range(i + 1, len(titles)):
+                orch_name_j, tid_j, tname_j, plays_j = titles[j]
+                sm.set_seq2(tname_j)
+                ratio = sm.ratio()
+                if ratio >= threshold:
+                    clean_i = canonicalize_title(tname_i) == tname_i
+                    clean_j = canonicalize_title(tname_j) == tname_j
+                    if clean_i and not clean_j:
+                        canon_id, canon_name, dup_id, dup_name = tid_i, tname_i, tid_j, tname_j
+                    elif clean_j and not clean_i:
+                        canon_id, canon_name, dup_id, dup_name = tid_j, tname_j, tid_i, tname_i
+                    elif plays_i >= plays_j:
+                        canon_id, canon_name, dup_id, dup_name = tid_i, tname_i, tid_j, tname_j
+                    else:
+                        canon_id, canon_name, dup_id, dup_name = tid_j, tname_j, tid_i, tname_i
+                    pairs.append((canon_name, dup_name, ratio, orch_name_i, canon_id, dup_id))
+
+    if not pairs:
+        if not apply:
+            print(f"Nessun titolo duplicato trovato (soglia {threshold}).")
+        conn.close()
+        return []
+
+    if not apply:
+        print(f"{'Orchestra':<35} {'Canonico':<40} {'Duplicato':<40} {'Ratio':>5}")
+        print("-" * 125)
+        for canon_name, dup_name, ratio, orch_name, *_ in pairs:
+            print(f"  [{orch_name:<33}] {canon_name!r:<40} ← {dup_name!r:<40} ({ratio:.2f})")
+        print(f"\n{len(pairs)} coppie trovate. Usa --apply per eseguire la merge.")
+        conn.close()
+        return [(a, b, r, o) for a, b, r, o, *_ in pairs]
+
+    merged = 0
+    for canon_name, dup_name, ratio, orch_name, canon_id, dup_id in pairs:
+        conn.execute(
+            "UPDATE plays SET title_id = ? WHERE title_id = ?",
+            (canon_id, dup_id),
+        )
+        conn.execute(
+            "UPDATE playlist_items SET title_id = ? WHERE title_id = ?",
+            (canon_id, dup_id),
+        )
+        conn.execute("DELETE FROM titles WHERE id = ?", (dup_id,))
+        merged += 1
+        print(f"  [{orch_name}] {dup_name!r} → {canon_name!r}  ({ratio:.2f})")
+
+    conn.commit()
+    conn.close()
+    print(f"\n{merged} titoli duplicati uniti.")
+    return [(a, b, r, o) for a, b, r, o, *_ in pairs]
+
+
 def boundary_tracks(dest_path: str, minutes: int, limit: int) -> None:
     # Calcola le ore di confine dalle fasce di palinsesto
     boundaries = set()
@@ -396,6 +486,14 @@ def main() -> None:
     p_purge.add_argument("--source", default=SOURCE_DB)
     p_purge.add_argument("--dest",   default=DEST_DB)
 
+    # dedup
+    p_dedup = sub.add_parser("dedup", help="Unisce titoli quasi-duplicati per orchestra")
+    p_dedup.add_argument("--dest",      default=DEST_DB)
+    p_dedup.add_argument("--threshold", type=float, default=0.92,
+                         help="Soglia di similarità 0.0-1.0 (default: 0.92)")
+    p_dedup.add_argument("--apply",     action="store_true",
+                         help="Esegui la merge (default: dry-run)")
+
     args = parser.parse_args()
 
     if args.command is None or args.command == "ingest":
@@ -408,6 +506,8 @@ def main() -> None:
         boundary_tracks(args.dest, args.minutes, args.limit)
     elif args.command == "purge":
         purge(args.source, args.dest)
+    elif args.command == "dedup":
+        dedup_titles(args.dest, args.threshold, args.apply)
 
 
 if __name__ == "__main__":
