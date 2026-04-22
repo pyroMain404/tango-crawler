@@ -110,3 +110,54 @@ def test_check_duplicate_timestamps_detects():
 def test_import():
     import audit
     assert hasattr(audit, 'main')
+
+
+def _insert_orchestra(conn, name):
+    return conn.execute("INSERT OR IGNORE INTO orchestras (name) VALUES (?)", (name,)).lastrowid or \
+           conn.execute("SELECT id FROM orchestras WHERE name=?", (name,)).fetchone()[0]
+
+def _insert_title(conn, name):
+    return conn.execute("INSERT OR IGNORE INTO titles (name) VALUES (?)", (name,)).lastrowid or \
+           conn.execute("SELECT id FROM titles WHERE name=?", (name,)).fetchone()[0]
+
+def _insert_play(conn, orch_id, title_id, fetched_at, year=None):
+    conn.execute(
+        "INSERT INTO plays (orchestra_id, title_id, year, fetched_at) VALUES (?, ?, ?, ?)",
+        (orch_id, title_id, year, fetched_at)
+    )
+
+def test_check_rare_orchestras_none():
+    from audit import check_rare_orchestras
+    conn = make_tango_db()
+    oid = _insert_orchestra(conn, "CARLOS DI SARLI")
+    tid = _insert_title(conn, "BAHIA BLANCA")
+    for i in range(5):
+        _insert_play(conn, oid, tid, f"2026-04-01T10:0{i}:00")
+    result = check_rare_orchestras(conn, min_plays=3)
+    assert result == []
+
+def test_check_rare_orchestras_detects():
+    from audit import check_rare_orchestras
+    conn = make_tango_db()
+    oid = _insert_orchestra(conn, "BANDA SCONOSCIUTA")
+    tid = _insert_title(conn, "BRANO MISTERIOSO")
+    _insert_play(conn, oid, tid, "2026-04-01T10:00:00")
+    result = check_rare_orchestras(conn, min_plays=3)
+    assert len(result) == 1
+    assert "BANDA SCONOSCIUTA" in result[0]
+
+def test_check_unusual_chars_clean():
+    from audit import check_unusual_chars
+    conn = make_tango_db()
+    _insert_orchestra(conn, "CARLOS DI SARLI")
+    _insert_title(conn, "BAHIA BLANCA")
+    result = check_unusual_chars(conn)
+    assert result == []
+
+def test_check_unusual_chars_detects():
+    from audit import check_unusual_chars
+    conn = make_tango_db()
+    _insert_orchestra(conn, "ORQUESTA`TIPICA")
+    _insert_title(conn, "TANGO|BEAT")
+    result = check_unusual_chars(conn)
+    assert len(result) == 2

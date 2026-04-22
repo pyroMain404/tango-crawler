@@ -87,6 +87,37 @@ def check_duplicate_timestamps_tracks(conn: sqlite3.Connection) -> list[str]:
     return [f"{ts}  ({n} volte)" for ts, n in rows]
 
 
+def check_rare_orchestras(conn: sqlite3.Connection, min_plays: int) -> list[str]:
+    rows = conn.execute("""
+        SELECT o.name, COUNT(*) n,
+               GROUP_CONCAT(DISTINCT t.name) titles
+        FROM plays p
+        JOIN orchestras o ON o.id = p.orchestra_id
+        JOIN titles     t ON t.id = p.title_id
+        GROUP BY o.id
+        HAVING n < ?
+        ORDER BY n
+    """, (min_plays,)).fetchall()
+    findings = []
+    for name, cnt, titles in rows:
+        titles_preview = (titles or "")[:80]
+        findings.append(f"{name!r}  ({cnt} play)  titoli: {titles_preview}")
+    return findings
+
+
+_UNUSUAL_RE = re.compile(r'[`|]|^\d+$')
+
+
+def check_unusual_chars(conn: sqlite3.Connection) -> list[str]:
+    findings = []
+    for table, col in [("orchestras", "name"), ("titles", "name")]:
+        rows = conn.execute(f"SELECT {col} FROM {table}").fetchall()
+        for (name,) in rows:
+            if _UNUSUAL_RE.search(name):
+                findings.append(f"[{table}] {name!r}")
+    return findings
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="Analisi anomalie tango-crawler")
     parser.add_argument("--tracks",    default=DEFAULT_TRACKS,
@@ -136,6 +167,31 @@ def main() -> None:
                 ok("nessun timestamp duplicato")
 
         conn_t.close()
+
+    # ── tango.db ─────────────────────────────────────────────────────────────
+    if os.path.exists(args.tango):
+        conn_n = sqlite3.connect(args.tango)
+        section_header("AUDIT tango.db")
+
+        sep("Orchestre rare (< " + str(args.min_plays) + " passaggi)")
+        findings = check_rare_orchestras(conn_n, args.min_plays)
+        if findings:
+            for f in findings:
+                anomaly(f)
+            total_issues += 1
+        else:
+            ok(f"nessuna orchestra con meno di {args.min_plays} passaggi")
+
+        sep("Caratteri insoliti in orchestre/titoli")
+        findings = check_unusual_chars(conn_n)
+        if findings:
+            for f in findings:
+                anomaly(f)
+            total_issues += 1
+        else:
+            ok("nessun carattere insolito trovato")
+
+        conn_n.close()
 
     print()
     if total_issues == 0:
