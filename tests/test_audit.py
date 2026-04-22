@@ -184,3 +184,56 @@ def test_check_similar_titles_detects():
     result = check_similar_titles(conn, threshold=0.85)
     assert len(result) == 1
     assert "BAHIA BLANCA" in result[0]
+
+def test_check_year_inconsistency_clean():
+    from audit import check_year_inconsistency
+    conn = make_tango_db()
+    oid = _insert_orchestra(conn, "CARLOS DI SARLI")
+    tid = _insert_title(conn, "BAHIA BLANCA")
+    _insert_play(conn, oid, tid, "2026-04-01T10:00:00", year=1941)
+    _insert_play(conn, oid, tid, "2026-04-01T10:05:00", year=1943)
+    result = check_year_inconsistency(conn)
+    assert result == []
+
+def test_check_year_inconsistency_detects():
+    from audit import check_year_inconsistency
+    conn = make_tango_db()
+    oid = _insert_orchestra(conn, "CARLOS DI SARLI")
+    tid = _insert_title(conn, "BAHIA BLANCA")
+    _insert_play(conn, oid, tid, "2026-04-01T10:00:00", year=1930)
+    _insert_play(conn, oid, tid, "2026-04-01T10:05:00", year=1960)
+    result = check_year_inconsistency(conn)
+    assert len(result) == 1
+    assert "1930" in result[0]
+    assert "1960" in result[0]
+
+def test_check_program_mismatch_clean():
+    from audit import check_program_mismatch
+    conn = make_tango_db()
+    # EPOCA D'ORO 1935-1955: ore 11-12
+    conn.execute("INSERT INTO programs (name, start_hour, end_hour) VALUES ('EPOCA D''ORO 1935-1955', 11, 12)")
+    prog_id = conn.execute("SELECT id FROM programs WHERE name='EPOCA D''ORO 1935-1955'").fetchone()[0]
+    oid = _insert_orchestra(conn, "CARLOS DI SARLI")
+    tid = _insert_title(conn, "BAHIA BLANCA")
+    conn.execute(
+        "INSERT INTO plays (orchestra_id, title_id, program_id, fetched_at) VALUES (?, ?, ?, ?)",
+        (oid, tid, prog_id, "2026-04-01T11:30:00")
+    )
+    result = check_program_mismatch(conn)
+    assert result == []
+
+def test_check_program_mismatch_detects():
+    from audit import check_program_mismatch
+    conn = make_tango_db()
+    conn.execute("INSERT INTO programs (name, start_hour, end_hour) VALUES ('EPOCA D''ORO 1935-1955', 11, 12)")
+    prog_id = conn.execute("SELECT id FROM programs WHERE name='EPOCA D''ORO 1935-1955'").fetchone()[0]
+    oid = _insert_orchestra(conn, "CARLOS DI SARLI")
+    tid = _insert_title(conn, "BAHIA BLANCA")
+    # Brano alle 15:00 ma assegnato a fascia 11-12
+    conn.execute(
+        "INSERT INTO plays (orchestra_id, title_id, program_id, fetched_at) VALUES (?, ?, ?, ?)",
+        (oid, tid, prog_id, "2026-04-01T15:30:00")
+    )
+    result = check_program_mismatch(conn)
+    assert len(result) == 1
+    assert "15" in result[0]

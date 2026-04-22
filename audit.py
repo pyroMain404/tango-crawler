@@ -145,6 +145,52 @@ def check_similar_titles(conn: sqlite3.Connection, threshold: float) -> list[str
     return findings
 
 
+def check_year_inconsistency(conn: sqlite3.Connection) -> list[str]:
+    rows = conn.execute("""
+        SELECT o.name, t.name, MIN(p.year), MAX(p.year), COUNT(*)
+        FROM plays p
+        JOIN orchestras o ON o.id = p.orchestra_id
+        JOIN titles     t ON t.id = p.title_id
+        WHERE p.year IS NOT NULL
+        GROUP BY p.orchestra_id, p.title_id
+        HAVING MAX(p.year) - MIN(p.year) > 10
+        ORDER BY (MAX(p.year) - MIN(p.year)) DESC
+    """).fetchall()
+    findings = []
+    for orch, title, yr_min, yr_max, cnt in rows:
+        findings.append(
+            f"{orch} — {title!r}  anni: {yr_min}–{yr_max}  ({cnt} play)"
+        )
+    return findings
+
+
+def check_program_mismatch(conn: sqlite3.Connection) -> list[str]:
+    rows = conn.execute("""
+        SELECT p.fetched_at, pr.name, pr.start_hour, pr.end_hour,
+               o.name, t.name
+        FROM plays p
+        JOIN programs   pr ON pr.id = p.program_id
+        JOIN orchestras o  ON o.id  = p.orchestra_id
+        JOIN titles     t  ON t.id  = p.title_id
+        WHERE pr.start_hour IS NOT NULL AND pr.end_hour IS NOT NULL
+          AND pr.start_hour != 0 AND pr.end_hour != 0
+    """).fetchall()
+
+    findings = []
+    for fetched_at, prog_name, start_h, end_h, orch, title in rows:
+        try:
+            hour = datetime.fromisoformat(fetched_at).hour
+        except ValueError:
+            continue
+        expected = get_program(hour)
+        if expected != prog_name:
+            findings.append(
+                f"{fetched_at}  [{prog_name}]  ora reale={hour:02d}h → atteso [{expected}]"
+                f"  ({orch} — {title})"
+            )
+    return findings
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="Analisi anomalie tango-crawler")
     parser.add_argument("--tracks",    default=DEFAULT_TRACKS,
@@ -226,6 +272,26 @@ def main() -> None:
             total_issues += 1
         else:
             ok(f"nessuna coppia con similarità >= {args.threshold}")
+
+        sep("Anni inconsistenti (stesso brano, range > 10 anni)")
+        findings = check_year_inconsistency(conn_n)
+        if findings:
+            for f in findings:
+                anomaly(f)
+            total_issues += 1
+        else:
+            ok("nessuna inconsistenza negli anni")
+
+        sep("Disallineamento programma/orario")
+        findings = check_program_mismatch(conn_n)
+        if findings:
+            for f in findings[:20]:
+                anomaly(f)
+            if len(findings) > 20:
+                print(f"  ... e altri {len(findings) - 20}")
+            total_issues += 1
+        else:
+            ok("programmi allineati agli orari reali")
 
         conn_n.close()
 
