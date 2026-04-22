@@ -67,6 +67,46 @@ def test_check_gaps_detects_gap():
     assert len(result) == 1
     assert "120" in result[0]
 
+def test_check_fascia_names_clean():
+    from audit import check_fascia_names_tracks
+    conn = make_tracks_db()
+    conn.executemany("INSERT INTO tracks (raw_title, orchestra, fetched_at) VALUES (?, ?, ?)", [
+        ("A * B", "CARLOS DI SARLI", "2026-04-01T10:00:00"),
+        ("A * B", "OSVALDO PUGLIESE", "2026-04-01T10:05:00"),
+    ])
+    result = check_fascia_names_tracks(conn)
+    assert result == []
+
+def test_check_fascia_names_detects():
+    from audit import check_fascia_names_tracks
+    conn = make_tracks_db()
+    conn.executemany("INSERT INTO tracks (raw_title, orchestra, fetched_at) VALUES (?, ?, ?)", [
+        ("A * B", "CREMA DI TANGO",   "2026-04-01T10:00:00"),
+        ("A * B", "MILONGA12",         "2026-04-01T10:05:00"),
+        ("A * B", "1915*1985",         "2026-04-01T10:10:00"),
+    ])
+    result = check_fascia_names_tracks(conn)
+    assert len(result) == 3
+
+def test_check_duplicate_timestamps_clean():
+    from audit import check_duplicate_timestamps_tracks
+    conn = make_tracks_db()
+    conn.executemany("INSERT INTO tracks (raw_title, fetched_at) VALUES (?, ?)", [
+        ("A * B", "2026-04-01T10:00:00"),
+        ("A * B", "2026-04-01T10:05:00"),
+    ])
+    result = check_duplicate_timestamps_tracks(conn)
+    assert result == []
+
+def test_check_duplicate_timestamps_detects():
+    from audit import check_duplicate_timestamps_tracks
+    conn = make_tracks_db()
+    conn.execute("INSERT INTO tracks (raw_title, fetched_at) VALUES ('A * B', '2026-04-01T10:00:00')")
+    conn.execute("INSERT INTO tracks (raw_title, fetched_at) VALUES ('C * D', '2026-04-01T10:00:00')")
+    result = check_duplicate_timestamps_tracks(conn)
+    assert len(result) == 1
+    assert "2026-04-01T10:00:00" in result[0]
+
 def test_import():
     import audit
     assert hasattr(audit, 'main')

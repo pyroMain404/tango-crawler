@@ -9,6 +9,7 @@ Uso:
 """
 import argparse
 import os
+import re
 import sqlite3
 from datetime import datetime
 
@@ -59,6 +60,33 @@ def check_gaps(conn: sqlite3.Connection, gap_minutes: int) -> list[str]:
     return findings
 
 
+_FASCIA_RE = re.compile(
+    r'^(MILONGA\d+|LE VIE DEL TANGO|CREMA DI TANGO|ORCHESTRE TIPICHE ATTUALI'
+    r'|EPOCA D.ORO|\d{4}[\*\-]?\d{4}.*|OTA|MILONGA\d*)$',
+    re.IGNORECASE,
+)
+
+
+def check_fascia_names_tracks(conn: sqlite3.Connection) -> list[str]:
+    rows = conn.execute(
+        "SELECT DISTINCT orchestra, COUNT(*) FROM tracks "
+        "WHERE orchestra IS NOT NULL GROUP BY orchestra"
+    ).fetchall()
+    findings = []
+    for name, cnt in rows:
+        if _FASCIA_RE.match(name.strip()):
+            findings.append(f"{name!r}  ({cnt} record)")
+    return findings
+
+
+def check_duplicate_timestamps_tracks(conn: sqlite3.Connection) -> list[str]:
+    rows = conn.execute(
+        "SELECT fetched_at, COUNT(*) n FROM tracks "
+        "GROUP BY fetched_at HAVING n > 1"
+    ).fetchall()
+    return [f"{ts}  ({n} volte)" for ts, n in rows]
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="Analisi anomalie tango-crawler")
     parser.add_argument("--tracks",    default=DEFAULT_TRACKS,
@@ -88,6 +116,24 @@ def main() -> None:
                 total_issues += 1
             else:
                 ok(f"nessun gap > {args.gap} min")
+
+            sep("Orchestre-fascia in tracks.db")
+            findings = check_fascia_names_tracks(conn_t)
+            if findings:
+                for f in findings:
+                    anomaly(f)
+                total_issues += 1
+            else:
+                ok("nessuna orchestra-fascia rilevata")
+
+            sep("fetched_at duplicati")
+            findings = check_duplicate_timestamps_tracks(conn_t)
+            if findings:
+                for f in findings:
+                    anomaly(f)
+                total_issues += 1
+            else:
+                ok("nessun timestamp duplicato")
 
         conn_t.close()
 
