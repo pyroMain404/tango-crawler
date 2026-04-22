@@ -110,14 +110,13 @@ def _make_dst_with_duplicates(tmp_path):
     orch_id       = conn.execute("SELECT id FROM orchestras WHERE name = 'CARLOS DI SARLI'").fetchone()[0]
     conn.execute(
         "INSERT INTO plays (orchestra_id, title_id, fetched_at) VALUES (?, ?, ?)",
-        (orch_id, dup_bahia_id, "2026-01-01T10:99:00"),
+        (orch_id, dup_bahia_id, "2026-01-01T23:59:00"),
     )
     conn.execute(
         "INSERT INTO plays (orchestra_id, title_id, fetched_at) VALUES (?, ?, ?)",
-        (orch_id, dup_torm_id, "2026-01-01T10:98:00"),
+        (orch_id, dup_torm_id, "2026-01-01T23:58:00"),
     )
     conn.commit()
-    conn.execute("PRAGMA foreign_keys = ON")
     conn.close()
     return str(dst), dup_bahia_id, dup_torm_id
 

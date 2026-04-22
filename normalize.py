@@ -16,6 +16,7 @@ Comandi diretti (avanzato):
   python normalize.py purge [--source X] [--dest Y]
 """
 import argparse
+from collections import defaultdict
 import difflib
 import os
 import re
@@ -272,8 +273,6 @@ def dedup_titles(dest_path: str, threshold: float, apply: bool) -> list[tuple]:
 
     Restituisce lista di tuple (canonical_name, duplicate_name, ratio, orchestra_name).
     """
-    from collections import defaultdict
-
     conn = sqlite3.connect(dest_path)
     conn.execute("PRAGMA foreign_keys = ON")
 
@@ -336,21 +335,30 @@ def dedup_titles(dest_path: str, threshold: float, apply: bool) -> list[tuple]:
         conn.close()
         return [(a, b, r, o) for a, b, r, o, *_ in pairs]
 
-    merged = 0
-    for canon_name, dup_name, ratio, orch_name, canon_id, dup_id in pairs:
-        conn.execute(
-            "UPDATE plays SET title_id = ? WHERE title_id = ?",
-            (canon_id, dup_id),
-        )
-        conn.execute(
-            "UPDATE playlist_items SET title_id = ? WHERE title_id = ?",
-            (canon_id, dup_id),
-        )
-        conn.execute("DELETE FROM titles WHERE id = ?", (dup_id,))
-        merged += 1
-        print(f"  [{orch_name}] {dup_name!r} → {canon_name!r}  ({ratio:.2f})")
-
-    conn.commit()
+    try:
+        merged = 0
+        already_merged: set[int] = set()
+        for canon_name, dup_name, ratio, orch_name, canon_id, dup_id in pairs:
+            if dup_id in already_merged:
+                continue
+            conn.execute(
+                "UPDATE plays SET title_id = ? WHERE title_id = ?",
+                (canon_id, dup_id),
+            )
+            conn.execute(
+                "UPDATE playlist_items SET title_id = ? WHERE title_id = ?",
+                (canon_id, dup_id),
+            )
+            conn.execute("DELETE FROM titles WHERE id = ?", (dup_id,))
+            already_merged.add(dup_id)
+            merged += 1
+            print(f"  [{orch_name}] {dup_name!r} → {canon_name!r}  ({ratio:.2f})")
+        conn.commit()
+    except Exception as exc:
+        conn.rollback()
+        conn.close()
+        print(f"ERRORE durante la deduplicazione: {exc}", file=sys.stderr)
+        sys.exit(1)
     conn.close()
     print(f"\n{merged} titoli duplicati uniti.")
     return [(a, b, r, o) for a, b, r, o, *_ in pairs]
