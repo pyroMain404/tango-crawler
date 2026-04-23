@@ -28,14 +28,19 @@ from common import DEFAULT_PROGRAM, JINGLE_ORCHESTRAS, PROGRAMS, canonicalize_ti
 SOURCE_DB  = os.getenv("DB_PATH",       "/data/tracks.db")
 DEST_DB    = os.getenv("NORMALIZED_DB", "/data/tango.db")
 
-_DEDUP_PUNCT_RE = re.compile(r"[`'.,;:_\-]+")
+_DEDUP_PUNCT_RE = re.compile(r"[`',;:_\-]+")  # no punto: le abbreviazioni (C.DANTE) restano distinte
 _MULTI_SPACE_RE = re.compile(r" {2,}")
 
 
 def normalize_for_dedup(name: str) -> str:
-    """Forma canonica per confronto dedup: rimuove punteggiatura e spazi multipli.
-    Due nomi che differiscono solo per punteggiatura risultano identici;
-    parole diverse rimangono distinte."""
+    """Forma canonica per confronto dedup.
+
+    Applica prima canonicalize_title (strip trailing punct incluso '.'),
+    poi rimuove backtick, virgole e caratteri speciali interni, infine
+    collassa spazi multipli. Il punto interno NON viene toccato: così
+    'C. DANTE' e 'C.DANTE' rimangono distinti e non vengono mai uniti.
+    """
+    name = canonicalize_title(name)      # strip trailing punct (incluso '.')
     name = _DEDUP_PUNCT_RE.sub(" ", name)
     name = _MULTI_SPACE_RE.sub(" ", name)
     return name.strip()
@@ -485,6 +490,82 @@ def dedup(dest_path: str, target: str, apply: bool) -> None:
             dedup_global(dest_path, t, apply)
 
 
+# ── fix-abbrev ────────────────────────────────────────────────────────────────
+
+_ABBREV_RE = re.compile(r'\.(?=[A-ZÁÉÍÓÚÀÈÌÒÙÑÜ])')
+
+_ABBREV_TABLES = [
+    ("orchestras", "name", [("plays", "orchestra_id"), ("playlist_items", "orchestra_id")]),
+    ("titles",     "name", [("plays", "title_id"),     ("playlist_items", "title_id")]),
+    ("singers",    "name", [("play_singers", "singer_id")]),
+]
+
+
+def _fix_abbrev_name(name: str) -> str:
+    """'C.DANTE' → 'C. DANTE': aggiunge spazio dopo punto in abbreviazioni."""
+    return _ABBREV_RE.sub('. ', name)
+
+
+def fix_abbrev_spaces(dest_path: str, apply: bool) -> None:
+    """Normalizza 'X.LETTERA' → 'X. LETTERA' in orchestras, titles, singers.
+
+    Gestisce conflitti UNIQUE: se la forma corretta esiste già, redirige i
+    riferimenti e cancella la voce errata (come il dedup).
+    """
+    conn = sqlite3.connect(dest_path)
+    conn.execute("PRAGMA foreign_keys = ON")
+
+    total_changes = 0
+
+    for table, col, fk_updates in _ABBREV_TABLES:
+        rows = conn.execute(f"SELECT id, {col} FROM {table} ORDER BY {col}").fetchall()
+        candidates = [(rid, name, _fix_abbrev_name(name)) for rid, name in rows
+                      if _fix_abbrev_name(name) != name]
+        if not candidates:
+            continue
+
+        if not apply:
+            print(f"\n── {table} ──")
+            for _, name, fixed in candidates:
+                print(f"  {name!r}  →  {fixed!r}")
+            total_changes += len(candidates)
+            continue
+
+        print(f"\n── {table} ──")
+        try:
+            for rid, name, fixed in candidates:
+                existing = conn.execute(
+                    f"SELECT id FROM {table} WHERE {col} = ? AND id != ?",
+                    (fixed, rid),
+                ).fetchone()
+                if existing:
+                    real_id = existing[0]
+                    for ft, fc in fk_updates:
+                        conn.execute(f"UPDATE {ft} SET {fc} = ? WHERE {fc} = ?", (real_id, rid))
+                    conn.execute(f"DELETE FROM {table} WHERE id = ?", (rid,))
+                    print(f"  {name!r} → {fixed!r}  (unito a esistente)")
+                else:
+                    conn.execute(f"UPDATE {table} SET {col} = ? WHERE id = ?", (fixed, rid))
+                    print(f"  {name!r} → {fixed!r}")
+                total_changes += 1
+            conn.commit()
+        except Exception as exc:
+            conn.rollback()
+            conn.close()
+            print(f"ERRORE ({table}): {exc}", file=sys.stderr)
+            sys.exit(1)
+
+    if not apply:
+        if total_changes:
+            print(f"\n{total_changes} nomi da correggere. Usa --apply per applicare.")
+        else:
+            print("Nessuna abbreviazione da correggere.")
+    else:
+        print(f"\n{total_changes} nomi corretti.")
+
+    conn.close()
+
+
 def boundary_tracks(dest_path: str, minutes: int, limit: int) -> None:
     # Calcola le ore di confine dalle fasce di palinsesto
     boundaries = set()
@@ -624,6 +705,13 @@ def main() -> None:
     p_dedup.add_argument("--apply",     action="store_true",
                          help="Esegui la merge (default: dry-run)")
 
+    # fix-abbrev
+    p_abbrev = sub.add_parser("fix-abbrev",
+                              help="Normalizza 'X.LETTERA' → 'X. LETTERA' in orchestre/titoli/cantanti")
+    p_abbrev.add_argument("--dest",  default=DEST_DB)
+    p_abbrev.add_argument("--apply", action="store_true",
+                          help="Applica le correzioni (default: dry-run)")
+
     args = parser.parse_args()
 
     if args.command is None or args.command == "ingest":
@@ -638,6 +726,8 @@ def main() -> None:
         purge(args.source, args.dest)
     elif args.command == "dedup":
         dedup(args.dest, args.target, args.apply)
+    elif args.command == "fix-abbrev":
+        fix_abbrev_spaces(args.dest, args.apply)
 
 
 if __name__ == "__main__":
