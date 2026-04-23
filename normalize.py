@@ -369,24 +369,53 @@ def dedup_titles(dest_path: str, threshold: float, apply: bool) -> list[tuple]:
 
     try:
         merged = 0
-        canon_renamed: set[int] = set()
+        # canon_id → effective id da usare (può cambiare se il canonico viene rimpiazzato)
+        canon_redirect: dict[int, int] = {}
         already_merged: set[int] = set()
         for orch_name, canon_id, canon_name, canon_clean_name, dup_id, dup_name, ratio in merges:
             if dup_id in already_merged:
                 continue
-            if canon_clean_name != canon_name and canon_id not in canon_renamed:
-                conn.execute(
-                    "UPDATE titles SET name = ? WHERE id = ?",
+
+            effective_canon_id = canon_redirect.get(canon_id, canon_id)
+
+            if canon_clean_name != canon_name and effective_canon_id == canon_id and canon_id not in canon_redirect:
+                existing = conn.execute(
+                    "SELECT id FROM titles WHERE name = ? AND id != ?",
                     (canon_clean_name, canon_id),
-                )
-                canon_renamed.add(canon_id)
+                ).fetchone()
+                if existing:
+                    # Un title pulito esiste già: rimpiazza il canonico con quello
+                    real_id = existing[0]
+                    conn.execute(
+                        "UPDATE plays SET title_id = ? WHERE title_id = ?",
+                        (real_id, canon_id),
+                    )
+                    conn.execute(
+                        "UPDATE playlist_items SET title_id = ? WHERE title_id = ?",
+                        (real_id, canon_id),
+                    )
+                    conn.execute("DELETE FROM titles WHERE id = ?", (canon_id,))
+                    already_merged.add(canon_id)
+                    canon_redirect[canon_id] = real_id
+                    effective_canon_id = real_id
+                    print(f"  [{orch_name}] {canon_name!r} → {canon_clean_name!r}  (title esistente)")
+                else:
+                    conn.execute(
+                        "UPDATE titles SET name = ? WHERE id = ?",
+                        (canon_clean_name, canon_id),
+                    )
+                    canon_redirect[canon_id] = canon_id
+
+            if dup_id == effective_canon_id or dup_id in already_merged:
+                continue
+
             conn.execute(
                 "UPDATE plays SET title_id = ? WHERE title_id = ?",
-                (canon_id, dup_id),
+                (effective_canon_id, dup_id),
             )
             conn.execute(
                 "UPDATE playlist_items SET title_id = ? WHERE title_id = ?",
-                (canon_id, dup_id),
+                (effective_canon_id, dup_id),
             )
             conn.execute("DELETE FROM titles WHERE id = ?", (dup_id,))
             already_merged.add(dup_id)
