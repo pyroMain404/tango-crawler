@@ -138,6 +138,10 @@ case "${1:-help}" in
                     -e DB_PATH=/data/tracks.db \
                     -e NORMALIZED_DB=/data/tango.db \
                     crawler python normalize.py ingest "$@"
+                echo ""
+                echo "── dedup ──"
+                python3 "$REPO_DIR/normalize.py" dedup \
+                    --dest "$DATA_DIR/tango.db" --apply
                 ;;
             reparse)
                 shift
