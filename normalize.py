@@ -506,7 +506,7 @@ def _fix_abbrev_name(name: str) -> str:
     return _ABBREV_RE.sub('. ', name)
 
 
-def fix_abbrev_spaces(dest_path: str, apply: bool) -> None:
+def fix_abbrev_spaces(dest_path: str, target: str, apply: bool) -> None:
     """Normalizza 'X.LETTERA' → 'X. LETTERA' in orchestras, titles, singers.
 
     Gestisce conflitti UNIQUE: se la forma corretta esiste già, redirige i
@@ -516,8 +516,9 @@ def fix_abbrev_spaces(dest_path: str, apply: bool) -> None:
     conn.execute("PRAGMA foreign_keys = ON")
 
     total_changes = 0
+    tables = _ABBREV_TABLES if target == "all" else [t for t in _ABBREV_TABLES if t[0] == target]
 
-    for table, col, fk_updates in _ABBREV_TABLES:
+    for table, col, fk_updates in tables:
         rows = conn.execute(f"SELECT id, {col} FROM {table} ORDER BY {col}").fetchall()
         candidates = [(rid, name, _fix_abbrev_name(name)) for rid, name in rows
                       if _fix_abbrev_name(name) != name]
@@ -708,6 +709,9 @@ def main() -> None:
     # fix-abbrev
     p_abbrev = sub.add_parser("fix-abbrev",
                               help="Normalizza 'X.LETTERA' → 'X. LETTERA' in orchestre/titoli/cantanti")
+    p_abbrev.add_argument("target",
+                          choices=["orchestras", "titles", "singers", "all"],
+                          help="Tabella da correggere")
     p_abbrev.add_argument("--dest",  default=DEST_DB)
     p_abbrev.add_argument("--apply", action="store_true",
                           help="Applica le correzioni (default: dry-run)")
@@ -727,7 +731,7 @@ def main() -> None:
     elif args.command == "dedup":
         dedup(args.dest, args.target, args.apply)
     elif args.command == "fix-abbrev":
-        fix_abbrev_spaces(args.dest, args.apply)
+        fix_abbrev_spaces(args.dest, args.target, args.apply)
 
 
 if __name__ == "__main__":

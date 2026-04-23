@@ -51,7 +51,7 @@ Sottocomandi:
   purge                 Elimina jingle ed errori di parsing da entrambi i DB
   maintain [--fix]      Verifica DB (con --fix: pulizia completa)
   dedup <target> [--apply]  Trova e unisce entità quasi-duplicate (dry-run senza --apply)
-  fix-abbrev [--apply]      Normalizza 'X.LETTERA' → 'X. LETTERA' in tutte le tabelle
+  fix-abbrev <target> [--apply]  Normalizza 'X.LETTERA' → 'X. LETTERA' (target: orchestras|titles|singers|all)
 
 Esempi:
   tango db normalize
@@ -60,8 +60,8 @@ Esempi:
   tango db maintain --fix
   tango db dedup titles
   tango db dedup all --apply
-  tango db fix-abbrev
-  tango db fix-abbrev --apply
+  tango db fix-abbrev singers
+  tango db fix-abbrev all --apply
 EOF
 }
 
@@ -178,7 +178,9 @@ case "${1:-help}" in
                 ;;
             fix-abbrev)
                 shift
-                python3 "$REPO_DIR/normalize.py" fix-abbrev \
+                target="${1:-all}"
+                [ $# -gt 0 ] && shift
+                python3 "$REPO_DIR/normalize.py" fix-abbrev "$target" \
                     --dest "$DATA_DIR/tango.db" "$@"
                 ;;
             "")
