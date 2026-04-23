@@ -125,7 +125,7 @@ def test_dedup_dry_run_finds_pairs(tmp_path):
     dst, dup_bahia_id, _ = _make_dst_with_duplicates(tmp_path)
     pairs = dedup_titles(dst, threshold=0.9, apply=False)
     assert len(pairs) >= 1
-    names = {(a, b) for a, b, *_ in pairs}
+    names = {(a, c) for a, _, c, *_ in pairs}
     assert ("BAHIA BLANCA", "BAHIA BLANCA.") in names or \
            ("BAHIA BLANCA.", "BAHIA BLANCA") in names
 

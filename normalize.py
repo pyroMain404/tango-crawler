@@ -308,17 +308,12 @@ def dedup_titles(dest_path: str, threshold: float, apply: bool) -> list[tuple]:
                 sm.set_seq2(tname_j)
                 ratio = sm.ratio()
                 if ratio >= threshold:
-                    clean_i = canonicalize_title(tname_i) == tname_i
-                    clean_j = canonicalize_title(tname_j) == tname_j
-                    if clean_i and not clean_j:
-                        canon_id, canon_name, dup_id, dup_name = tid_i, tname_i, tid_j, tname_j
-                    elif clean_j and not clean_i:
-                        canon_id, canon_name, dup_id, dup_name = tid_j, tname_j, tid_i, tname_i
-                    elif plays_i >= plays_j:
+                    if plays_i >= plays_j:
                         canon_id, canon_name, dup_id, dup_name = tid_i, tname_i, tid_j, tname_j
                     else:
                         canon_id, canon_name, dup_id, dup_name = tid_j, tname_j, tid_i, tname_i
-                    pairs.append((canon_name, dup_name, ratio, orch_name_i, canon_id, dup_id))
+                    canon_clean_name = canonicalize_title(canon_name)
+                    pairs.append((canon_name, canon_clean_name, dup_name, ratio, orch_name_i, canon_id, dup_id))
 
     if not pairs:
         if not apply:
@@ -329,18 +324,24 @@ def dedup_titles(dest_path: str, threshold: float, apply: bool) -> list[tuple]:
     if not apply:
         print(f"{'Orchestra':<35} {'Canonico':<40} {'Duplicato':<40} {'Ratio':>5}")
         print("-" * 125)
-        for canon_name, dup_name, ratio, orch_name, *_ in pairs:
-            print(f"  [{orch_name:<33}] {canon_name!r:<40} ← {dup_name!r:<40} ({ratio:.2f})")
+        for canon_name, canon_clean_name, dup_name, ratio, orch_name, *_ in pairs:
+            label = canon_clean_name if canon_clean_name != canon_name else canon_name
+            print(f"  [{orch_name:<33}] {label!r:<40} ← {dup_name!r:<40} ({ratio:.2f})")
         print(f"\n{len(pairs)} coppie trovate. Usa --apply per eseguire la merge.")
         conn.close()
-        return [(a, b, r, o) for a, b, r, o, *_ in pairs]
+        return [(a, c, b, r, o) for a, c, b, r, o, *_ in pairs]
 
     try:
         merged = 0
         already_merged: set[int] = set()
-        for canon_name, dup_name, ratio, orch_name, canon_id, dup_id in pairs:
+        for canon_name, canon_clean_name, dup_name, ratio, orch_name, canon_id, dup_id in pairs:
             if dup_id in already_merged:
                 continue
+            if canon_clean_name != canon_name:
+                conn.execute(
+                    "UPDATE titles SET name = ? WHERE id = ?",
+                    (canon_clean_name, canon_id),
+                )
             conn.execute(
                 "UPDATE plays SET title_id = ? WHERE title_id = ?",
                 (canon_id, dup_id),
@@ -352,7 +353,8 @@ def dedup_titles(dest_path: str, threshold: float, apply: bool) -> list[tuple]:
             conn.execute("DELETE FROM titles WHERE id = ?", (dup_id,))
             already_merged.add(dup_id)
             merged += 1
-            print(f"  [{orch_name}] {dup_name!r} → {canon_name!r}  ({ratio:.2f})")
+            label = canon_clean_name if canon_clean_name != canon_name else canon_name
+            print(f"  [{orch_name}] {dup_name!r} → {label!r}  ({ratio:.2f})")
         conn.commit()
     except Exception as exc:
         conn.rollback()
@@ -361,7 +363,7 @@ def dedup_titles(dest_path: str, threshold: float, apply: bool) -> list[tuple]:
         sys.exit(1)
     conn.close()
     print(f"\n{merged} titoli duplicati uniti.")
-    return [(a, b, r, o) for a, b, r, o, *_ in pairs]
+    return [(a, c, b, r, o) for a, c, b, r, o, *_ in pairs]
 
 
 def boundary_tracks(dest_path: str, minutes: int, limit: int) -> None:
