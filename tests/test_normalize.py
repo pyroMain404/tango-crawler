@@ -123,7 +123,7 @@ def _make_dst_with_duplicates(tmp_path):
 
 def test_dedup_dry_run_finds_pairs(tmp_path):
     dst, dup_bahia_id, _ = _make_dst_with_duplicates(tmp_path)
-    pairs = dedup_titles(dst, threshold=0.9, apply=False)
+    pairs = dedup_titles(dst, apply=False)
     assert len(pairs) >= 1
     names = {(a, c) for a, _, c, *_ in pairs}
     assert ("BAHIA BLANCA", "BAHIA BLANCA.") in names or \
@@ -132,7 +132,7 @@ def test_dedup_dry_run_finds_pairs(tmp_path):
 
 def test_dedup_apply_merges_plays(tmp_path):
     dst, dup_bahia_id, _ = _make_dst_with_duplicates(tmp_path)
-    dedup_titles(dst, threshold=0.9, apply=True)
+    dedup_titles(dst, apply=True)
 
     conn = sqlite3.connect(dst)
     row = conn.execute("SELECT id FROM titles WHERE name = 'BAHIA BLANCA.'").fetchone()
@@ -146,6 +146,6 @@ def test_dedup_apply_merges_plays(tmp_path):
 
 def test_dedup_apply_idempotent(tmp_path):
     dst, _, _ = _make_dst_with_duplicates(tmp_path)
-    dedup_titles(dst, threshold=0.9, apply=True)
-    pairs_second = dedup_titles(dst, threshold=0.9, apply=True)
+    dedup_titles(dst, apply=True)
+    pairs_second = dedup_titles(dst, apply=True)
     assert pairs_second == [], "Seconda esecuzione non dovrebbe trovare ulteriori duplicati"
