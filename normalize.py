@@ -267,170 +267,236 @@ def similar_titles(dest_path: str, threshold: float, limit: int) -> None:
     print(f"\n{len(pairs)} coppie trovate.")
 
 
-def dedup_titles(dest_path: str, threshold: float, apply: bool) -> list[tuple]:
-    """
-    Trova e (opzionalmente) unisce titoli quasi-duplicati per la stessa orchestra.
+# ── Dedup helpers ─────────────────────────────────────────────────────────────
 
-    Raggruppa i quasi-duplicati in componenti connesse e sceglie un unico canonico
-    per gruppo (il titolo con più plays). Restituisce lista di tuple
-    (canonical_name, canonical_clean_name, duplicate_name, ratio, orchestra_name).
-    """
+def _connected_components(
+    items: list[tuple],  # (id, name, count, ...)
+    threshold: float,
+) -> list[tuple]:
+    """Trova componenti connesse di quasi-duplicati e restituisce
+    (canon_id, canon_name, canon_clean, dup_id, dup_name, ratio) per ogni dup."""
+    n = len(items)
+    if n < 2:
+        return []
+    sm = difflib.SequenceMatcher(autojunk=False)
+    adj: dict[int, list[int]] = defaultdict(list)
+    best_ratio: dict[tuple[int, int], float] = {}
+    for i in range(n):
+        sm.set_seq1(items[i][1])
+        for j in range(i + 1, n):
+            sm.set_seq2(items[j][1])
+            r = sm.ratio()
+            if r >= threshold:
+                adj[i].append(j)
+                adj[j].append(i)
+                best_ratio[(i, j)] = r
+    visited: set[int] = set()
+    merges: list[tuple] = []
+    for start in range(n):
+        if start in visited or not adj[start]:
+            visited.add(start)
+            continue
+        component: list[int] = []
+        queue = [start]
+        while queue:
+            node = queue.pop()
+            if node in visited:
+                continue
+            visited.add(node)
+            component.append(node)
+            queue.extend(adj[node])
+        if len(component) < 2:
+            continue
+        canon_idx  = max(component, key=lambda i: items[i][2])
+        canon_id   = items[canon_idx][0]
+        canon_name = items[canon_idx][1]
+        canon_clean = canonicalize_title(canon_name)
+        for idx in component:
+            if idx == canon_idx:
+                continue
+            key = (min(canon_idx, idx), max(canon_idx, idx))
+            merges.append((canon_id, canon_name, canon_clean,
+                           items[idx][0], items[idx][1],
+                           best_ratio.get(key, threshold)))
+    return merges
+
+
+def _apply_merges(
+    conn: sqlite3.Connection,
+    table: str,
+    fk_updates: list[tuple[str, str]],
+    merges: list[tuple],        # (canon_id, canon_name, canon_clean, dup_id, dup_name, ratio)
+    prefix_fn=None,             # callable(canon_id) → str prefix per display
+) -> int:
+    merged = 0
+    canon_redirect: dict[int, int] = {}
+    already_merged: set[int] = set()
+    for canon_id, canon_name, canon_clean, dup_id, dup_name, ratio in merges:
+        if dup_id in already_merged:
+            continue
+        effective = canon_redirect.get(canon_id, canon_id)
+        prefix = prefix_fn(canon_id) if prefix_fn else "  "
+        if canon_clean != canon_name and canon_id not in canon_redirect:
+            existing = conn.execute(
+                f"SELECT id FROM {table} WHERE name = ? AND id != ?",
+                (canon_clean, effective),
+            ).fetchone()
+            if existing:
+                real_id = existing[0]
+                for ft, fc in fk_updates:
+                    conn.execute(f"UPDATE {ft} SET {fc} = ? WHERE {fc} = ?", (real_id, effective))
+                conn.execute(f"DELETE FROM {table} WHERE id = ?", (effective,))
+                already_merged.add(effective)
+                canon_redirect[canon_id] = real_id
+                effective = real_id
+                print(f"{prefix}{canon_name!r} → {canon_clean!r}  (unito a esistente)")
+            else:
+                conn.execute(f"UPDATE {table} SET name = ? WHERE id = ?", (canon_clean, effective))
+                canon_redirect[canon_id] = effective
+        if dup_id == effective or dup_id in already_merged:
+            continue
+        for ft, fc in fk_updates:
+            conn.execute(f"UPDATE {ft} SET {fc} = ? WHERE {fc} = ?", (effective, dup_id))
+        conn.execute(f"DELETE FROM {table} WHERE id = ?", (dup_id,))
+        already_merged.add(dup_id)
+        merged += 1
+        label = canon_clean if canon_clean != canon_name else canon_name
+        print(f"{prefix}{dup_name!r} → {label!r}  ({ratio:.2f})")
+    return merged
+
+
+# ── Dedup per entità ───────────────────────────────────────────────────────────
+
+_DEDUP_CONFIG: dict[str, dict] = {
+    "orchestras": {
+        "table":    "orchestras",
+        "label":    "orchestre",
+        "count_sql": """
+            SELECT o.id, o.name, COUNT(p.id)
+            FROM orchestras o LEFT JOIN plays p ON p.orchestra_id = o.id
+            GROUP BY o.id ORDER BY o.name
+        """,
+        "fk_updates": [("plays", "orchestra_id"), ("playlist_items", "orchestra_id")],
+    },
+    "singers": {
+        "table":    "singers",
+        "label":    "cantanti",
+        "count_sql": """
+            SELECT s.id, s.name, COUNT(ps.play_id)
+            FROM singers s LEFT JOIN play_singers ps ON ps.singer_id = s.id
+            GROUP BY s.id ORDER BY s.name
+        """,
+        "fk_updates": [("play_singers", "singer_id")],
+    },
+    "programs": {
+        "table":    "programs",
+        "label":    "programmi",
+        "count_sql": """
+            SELECT p.id, p.name, COUNT(pl.id)
+            FROM programs p LEFT JOIN plays pl ON pl.program_id = p.id
+            GROUP BY p.id ORDER BY p.name
+        """,
+        "fk_updates": [("plays", "program_id")],
+    },
+}
+
+
+def dedup_global(dest_path: str, entity: str, threshold: float, apply: bool) -> list[tuple]:
+    cfg = _DEDUP_CONFIG[entity]
     conn = sqlite3.connect(dest_path)
     conn.execute("PRAGMA foreign_keys = ON")
+    rows   = conn.execute(cfg["count_sql"]).fetchall()
+    merges = _connected_components(list(rows), threshold)
+    if not merges:
+        if not apply:
+            print(f"Nessun duplicato trovato per {cfg['label']} (soglia {threshold}).")
+        conn.close()
+        return []
+    if not apply:
+        print(f"{'Canonico':<50} {'Duplicato':<50} {'Ratio':>5}")
+        print("-" * 110)
+        for _, cn, cc, _, dn, r in merges:
+            label = cc if cc != cn else cn
+            print(f"  {label!r:<48} ← {dn!r:<48} ({r:.2f})")
+        print(f"\n{len(merges)} duplicati trovati. Usa --apply per eseguire la merge.")
+        conn.close()
+        return [(cn, cc, dn, r) for _, cn, cc, _, dn, r in merges]
+    try:
+        n = _apply_merges(conn, cfg["table"], cfg["fk_updates"], merges)
+        conn.commit()
+    except Exception as exc:
+        conn.rollback()
+        conn.close()
+        print(f"ERRORE durante la deduplicazione ({entity}): {exc}", file=sys.stderr)
+        sys.exit(1)
+    conn.close()
+    print(f"\n{n} {cfg['label']} duplicate unite.")
+    return [(cn, cc, dn, r) for _, cn, cc, _, dn, r in merges]
 
+
+def dedup_titles(dest_path: str, threshold: float, apply: bool) -> list[tuple]:
+    conn = sqlite3.connect(dest_path)
+    conn.execute("PRAGMA foreign_keys = ON")
     rows = conn.execute("""
         SELECT o.id, o.name, t.id, t.name, COUNT(p.id)
         FROM plays p
         JOIN orchestras o ON o.id = p.orchestra_id
         JOIN titles t     ON t.id = p.title_id
-        GROUP BY o.id, t.id
-        ORDER BY o.name, t.name
+        GROUP BY o.id, t.id ORDER BY o.name, t.name
     """).fetchall()
-
-    by_orch: dict[int, list[tuple]] = defaultdict(list)
-    for orch_id, orch_name, title_id, title_name, play_count in rows:
-        by_orch[orch_id].append((orch_name, title_id, title_name, play_count))
-
-    sm = difflib.SequenceMatcher(autojunk=False)
-    # (orch_name, canon_id, canon_name, canon_clean_name, dup_id, dup_name, ratio)
-    merges: list[tuple] = []
-
-    for orch_id, entries in by_orch.items():
-        seen: dict[str, tuple] = {}
-        for entry in entries:
-            name = entry[2]
-            if name not in seen:
-                seen[name] = entry
-        titles = list(seen.values())
-        n = len(titles)
-
-        # Build adjacency list of near-duplicate pairs
-        adj: dict[int, list[int]] = defaultdict(list)
-        best_ratio: dict[tuple[int, int], float] = {}
-        for i in range(n):
-            sm.set_seq1(titles[i][2])
-            for j in range(i + 1, n):
-                sm.set_seq2(titles[j][2])
-                ratio = sm.ratio()
-                if ratio >= threshold:
-                    adj[i].append(j)
-                    adj[j].append(i)
-                    best_ratio[(i, j)] = ratio
-
-        # Find connected components via BFS
-        visited: set[int] = set()
-        for start in range(n):
-            if start in visited or not adj[start]:
-                visited.add(start)
-                continue
-            component: list[int] = []
-            queue = [start]
-            while queue:
-                node = queue.pop()
-                if node in visited:
-                    continue
-                visited.add(node)
-                component.append(node)
-                queue.extend(adj[node])
-            if len(component) < 2:
-                continue
-
-            # Pick canonical: most plays
-            canon_idx = max(component, key=lambda i: titles[i][3])
-            orch_name = titles[canon_idx][0]
-            canon_id   = titles[canon_idx][1]
-            canon_name = titles[canon_idx][2]
-            canon_clean_name = canonicalize_title(canon_name)
-
-            for idx in component:
-                if idx == canon_idx:
-                    continue
-                dup_id   = titles[idx][1]
-                dup_name = titles[idx][2]
-                key = (min(canon_idx, idx), max(canon_idx, idx))
-                ratio = best_ratio.get(key, threshold)
-                merges.append((orch_name, canon_id, canon_name, canon_clean_name, dup_id, dup_name, ratio))
-
-    if not merges:
+    by_orch: dict[int, tuple[str, list]] = {}
+    for orch_id, orch_name, tid, tname, cnt in rows:
+        if orch_id not in by_orch:
+            by_orch[orch_id] = (orch_name, {})
+        by_orch[orch_id][1].setdefault(tname, (tid, tname, cnt))
+    # (orch_name, canon_id, canon_name, canon_clean, dup_id, dup_name, ratio)
+    all_merges: list[tuple] = []
+    for orch_id, (orch_name, seen) in by_orch.items():
+        for cm in _connected_components(list(seen.values()), threshold):
+            all_merges.append((orch_name, *cm))
+    if not all_merges:
         if not apply:
             print(f"Nessun titolo duplicato trovato (soglia {threshold}).")
         conn.close()
         return []
-
     if not apply:
         print(f"{'Orchestra':<35} {'Canonico':<40} {'Duplicato':<40} {'Ratio':>5}")
         print("-" * 125)
-        for orch_name, _, canon_name, canon_clean_name, _, dup_name, ratio in merges:
-            label = canon_clean_name if canon_clean_name != canon_name else canon_name
-            print(f"  [{orch_name:<33}] {label!r:<40} ← {dup_name!r:<40} ({ratio:.2f})")
-        print(f"\n{len(merges)} duplicati trovati. Usa --apply per eseguire la merge.")
+        for orch_name, _, cn, cc, _, dn, r in all_merges:
+            label = cc if cc != cn else cn
+            print(f"  [{orch_name:<33}] {label!r:<40} ← {dn!r:<40} ({r:.2f})")
+        print(f"\n{len(all_merges)} duplicati trovati. Usa --apply per eseguire la merge.")
         conn.close()
-        return [(cn, cc, dn, r, o) for o, _, cn, cc, _, dn, r in merges]
-
+        return [(cn, cc, dn, r, o) for o, _, cn, cc, _, dn, r in all_merges]
+    orch_of: dict[int, str] = {m[1]: m[0] for m in all_merges}
+    plain = [m[1:] for m in all_merges]  # strip orch_name prefix
     try:
-        merged = 0
-        # canon_id → effective id da usare (può cambiare se il canonico viene rimpiazzato)
-        canon_redirect: dict[int, int] = {}
-        already_merged: set[int] = set()
-        for orch_name, canon_id, canon_name, canon_clean_name, dup_id, dup_name, ratio in merges:
-            if dup_id in already_merged:
-                continue
-
-            effective_canon_id = canon_redirect.get(canon_id, canon_id)
-
-            if canon_clean_name != canon_name and effective_canon_id == canon_id and canon_id not in canon_redirect:
-                existing = conn.execute(
-                    "SELECT id FROM titles WHERE name = ? AND id != ?",
-                    (canon_clean_name, canon_id),
-                ).fetchone()
-                if existing:
-                    # Un title pulito esiste già: rimpiazza il canonico con quello
-                    real_id = existing[0]
-                    conn.execute(
-                        "UPDATE plays SET title_id = ? WHERE title_id = ?",
-                        (real_id, canon_id),
-                    )
-                    conn.execute(
-                        "UPDATE playlist_items SET title_id = ? WHERE title_id = ?",
-                        (real_id, canon_id),
-                    )
-                    conn.execute("DELETE FROM titles WHERE id = ?", (canon_id,))
-                    already_merged.add(canon_id)
-                    canon_redirect[canon_id] = real_id
-                    effective_canon_id = real_id
-                    print(f"  [{orch_name}] {canon_name!r} → {canon_clean_name!r}  (title esistente)")
-                else:
-                    conn.execute(
-                        "UPDATE titles SET name = ? WHERE id = ?",
-                        (canon_clean_name, canon_id),
-                    )
-                    canon_redirect[canon_id] = canon_id
-
-            if dup_id == effective_canon_id or dup_id in already_merged:
-                continue
-
-            conn.execute(
-                "UPDATE plays SET title_id = ? WHERE title_id = ?",
-                (effective_canon_id, dup_id),
-            )
-            conn.execute(
-                "UPDATE playlist_items SET title_id = ? WHERE title_id = ?",
-                (effective_canon_id, dup_id),
-            )
-            conn.execute("DELETE FROM titles WHERE id = ?", (dup_id,))
-            already_merged.add(dup_id)
-            merged += 1
-            label = canon_clean_name if canon_clean_name != canon_name else canon_name
-            print(f"  [{orch_name}] {dup_name!r} → {label!r}  ({ratio:.2f})")
+        n = _apply_merges(
+            conn, "titles",
+            [("plays", "title_id"), ("playlist_items", "title_id")],
+            plain,
+            prefix_fn=lambda cid: f"  [{orch_of.get(cid, ''):<33}] ",
+        )
         conn.commit()
     except Exception as exc:
         conn.rollback()
         conn.close()
-        print(f"ERRORE durante la deduplicazione: {exc}", file=sys.stderr)
+        print(f"ERRORE durante la deduplicazione dei titoli: {exc}", file=sys.stderr)
         sys.exit(1)
     conn.close()
-    print(f"\n{merged} titoli duplicati uniti.")
-    return [(cn, cc, dn, r, o) for o, _, cn, cc, _, dn, r in merges]
+    print(f"\n{n} titoli duplicati uniti.")
+    return [(cn, cc, dn, r, o) for o, _, cn, cc, _, dn, r in all_merges]
+
+
+def dedup(dest_path: str, target: str, threshold: float, apply: bool) -> None:
+    targets = ["orchestras", "titles", "singers"] if target == "all" else [target]
+    for t in targets:
+        if len(targets) > 1:
+            print(f"\n── {t} ──")
+        if t == "titles":
+            dedup_titles(dest_path, threshold, apply)
+        else:
+            dedup_global(dest_path, t, threshold, apply)
 
 
 def boundary_tracks(dest_path: str, minutes: int, limit: int) -> None:
@@ -564,7 +630,10 @@ def main() -> None:
     p_purge.add_argument("--dest",   default=DEST_DB)
 
     # dedup
-    p_dedup = sub.add_parser("dedup", help="Unisce titoli quasi-duplicati per orchestra")
+    p_dedup = sub.add_parser("dedup", help="Unisce entità quasi-duplicate")
+    p_dedup.add_argument("target",
+                         choices=["orchestras", "titles", "singers", "programs", "all"],
+                         help="Entità da deduplicare")
     p_dedup.add_argument("--dest",      default=DEST_DB)
     p_dedup.add_argument("--threshold", type=float, default=0.92,
                          help="Soglia di similarità 0.0-1.0 (default: 0.92)")
@@ -584,7 +653,7 @@ def main() -> None:
     elif args.command == "purge":
         purge(args.source, args.dest)
     elif args.command == "dedup":
-        dedup_titles(args.dest, args.threshold, args.apply)
+        dedup(args.dest, args.target, args.threshold, args.apply)
 
 
 if __name__ == "__main__":
