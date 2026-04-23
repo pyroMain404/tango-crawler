@@ -271,7 +271,9 @@ def dedup_titles(dest_path: str, threshold: float, apply: bool) -> list[tuple]:
     """
     Trova e (opzionalmente) unisce titoli quasi-duplicati per la stessa orchestra.
 
-    Restituisce lista di tuple (canonical_name, duplicate_name, ratio, orchestra_name).
+    Raggruppa i quasi-duplicati in componenti connesse e sceglie un unico canonico
+    per gruppo (il titolo con più plays). Restituisce lista di tuple
+    (canonical_name, canonical_clean_name, duplicate_name, ratio, orchestra_name).
     """
     conn = sqlite3.connect(dest_path)
     conn.execute("PRAGMA foreign_keys = ON")
@@ -290,7 +292,8 @@ def dedup_titles(dest_path: str, threshold: float, apply: bool) -> list[tuple]:
         by_orch[orch_id].append((orch_name, title_id, title_name, play_count))
 
     sm = difflib.SequenceMatcher(autojunk=False)
-    pairs: list[tuple] = []
+    # (orch_name, canon_id, canon_name, canon_clean_name, dup_id, dup_name, ratio)
+    merges: list[tuple] = []
 
     for orch_id, entries in by_orch.items():
         seen: dict[str, tuple] = {}
@@ -299,23 +302,56 @@ def dedup_titles(dest_path: str, threshold: float, apply: bool) -> list[tuple]:
             if name not in seen:
                 seen[name] = entry
         titles = list(seen.values())
+        n = len(titles)
 
-        for i in range(len(titles)):
-            orch_name_i, tid_i, tname_i, plays_i = titles[i]
-            sm.set_seq1(tname_i)
-            for j in range(i + 1, len(titles)):
-                orch_name_j, tid_j, tname_j, plays_j = titles[j]
-                sm.set_seq2(tname_j)
+        # Build adjacency list of near-duplicate pairs
+        adj: dict[int, list[int]] = defaultdict(list)
+        best_ratio: dict[tuple[int, int], float] = {}
+        for i in range(n):
+            sm.set_seq1(titles[i][2])
+            for j in range(i + 1, n):
+                sm.set_seq2(titles[j][2])
                 ratio = sm.ratio()
                 if ratio >= threshold:
-                    if plays_i >= plays_j:
-                        canon_id, canon_name, dup_id, dup_name = tid_i, tname_i, tid_j, tname_j
-                    else:
-                        canon_id, canon_name, dup_id, dup_name = tid_j, tname_j, tid_i, tname_i
-                    canon_clean_name = canonicalize_title(canon_name)
-                    pairs.append((canon_name, canon_clean_name, dup_name, ratio, orch_name_i, canon_id, dup_id))
+                    adj[i].append(j)
+                    adj[j].append(i)
+                    best_ratio[(i, j)] = ratio
 
-    if not pairs:
+        # Find connected components via BFS
+        visited: set[int] = set()
+        for start in range(n):
+            if start in visited or not adj[start]:
+                visited.add(start)
+                continue
+            component: list[int] = []
+            queue = [start]
+            while queue:
+                node = queue.pop()
+                if node in visited:
+                    continue
+                visited.add(node)
+                component.append(node)
+                queue.extend(adj[node])
+            if len(component) < 2:
+                continue
+
+            # Pick canonical: most plays
+            canon_idx = max(component, key=lambda i: titles[i][3])
+            orch_name = titles[canon_idx][0]
+            canon_id   = titles[canon_idx][1]
+            canon_name = titles[canon_idx][2]
+            canon_clean_name = canonicalize_title(canon_name)
+
+            for idx in component:
+                if idx == canon_idx:
+                    continue
+                dup_id   = titles[idx][1]
+                dup_name = titles[idx][2]
+                key = (min(canon_idx, idx), max(canon_idx, idx))
+                ratio = best_ratio.get(key, threshold)
+                merges.append((orch_name, canon_id, canon_name, canon_clean_name, dup_id, dup_name, ratio))
+
+    if not merges:
         if not apply:
             print(f"Nessun titolo duplicato trovato (soglia {threshold}).")
         conn.close()
@@ -324,24 +360,26 @@ def dedup_titles(dest_path: str, threshold: float, apply: bool) -> list[tuple]:
     if not apply:
         print(f"{'Orchestra':<35} {'Canonico':<40} {'Duplicato':<40} {'Ratio':>5}")
         print("-" * 125)
-        for canon_name, canon_clean_name, dup_name, ratio, orch_name, *_ in pairs:
+        for orch_name, _, canon_name, canon_clean_name, _, dup_name, ratio in merges:
             label = canon_clean_name if canon_clean_name != canon_name else canon_name
             print(f"  [{orch_name:<33}] {label!r:<40} ← {dup_name!r:<40} ({ratio:.2f})")
-        print(f"\n{len(pairs)} coppie trovate. Usa --apply per eseguire la merge.")
+        print(f"\n{len(merges)} duplicati trovati. Usa --apply per eseguire la merge.")
         conn.close()
-        return [(a, c, b, r, o) for a, c, b, r, o, *_ in pairs]
+        return [(cn, cc, dn, r, o) for o, _, cn, cc, _, dn, r in merges]
 
     try:
         merged = 0
+        canon_renamed: set[int] = set()
         already_merged: set[int] = set()
-        for canon_name, canon_clean_name, dup_name, ratio, orch_name, canon_id, dup_id in pairs:
+        for orch_name, canon_id, canon_name, canon_clean_name, dup_id, dup_name, ratio in merges:
             if dup_id in already_merged:
                 continue
-            if canon_clean_name != canon_name:
+            if canon_clean_name != canon_name and canon_id not in canon_renamed:
                 conn.execute(
                     "UPDATE titles SET name = ? WHERE id = ?",
                     (canon_clean_name, canon_id),
                 )
+                canon_renamed.add(canon_id)
             conn.execute(
                 "UPDATE plays SET title_id = ? WHERE title_id = ?",
                 (canon_id, dup_id),
@@ -363,7 +401,7 @@ def dedup_titles(dest_path: str, threshold: float, apply: bool) -> list[tuple]:
         sys.exit(1)
     conn.close()
     print(f"\n{merged} titoli duplicati uniti.")
-    return [(a, c, b, r, o) for a, c, b, r, o, *_ in pairs]
+    return [(cn, cc, dn, r, o) for o, _, cn, cc, _, dn, r in merges]
 
 
 def boundary_tracks(dest_path: str, minutes: int, limit: int) -> None:
